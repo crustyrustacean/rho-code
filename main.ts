@@ -43,16 +43,28 @@ if (!childStdin || !childStdout) {
 
 // ── Send JSON-RPC request to rho ──────────────────────────────────────────────
 
-function sendRequest(method: string, params: Record<string, unknown> = {}) {
+// Pending request-response callbacks, keyed by JSON-RPC id.
+const pendingRequests = new Map<string, (result: unknown) => void>();
+
+function sendRequest(method: string, params: Record<string, unknown> = {}): string {
+  const id = crypto.randomUUID();
   const message = JSON.stringify({
     jsonrpc: "2.0",
-    id: crypto.randomUUID(),
+    id,
     method,
     params,
   });
   const writer = childStdin.getWriter();
   writer.write(new TextEncoder().encode(message + "\n"));
   writer.releaseLock();
+  return id;
+}
+
+function requestResponse(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  return new Promise((resolve) => {
+    const id = sendRequest(method, params);
+    pendingRequests.set(id, resolve);
+  });
 }
 
 // ── Format tool arguments for display ──────────────────────────────────────────
@@ -206,12 +218,24 @@ function handleRhoMessage(msg: Record<string, unknown>) {
       } else {
         parts.push(`${dur}ms`);
       }
-      if (usage?.totalCost > 0) {
-        parts.push(`$${usage.totalCost.toFixed(4)}`);
-      }
 
-      process.stdout.write(`\n${gray}─── ${parts.join(" · ")} ───${reset}\n`);
-      process.stdout.write("> ");
+      // Fetch session stats asynchronously and append context info
+      requestResponse("getSessionStats").then((stats) => {
+        const s = stats as {
+          contextWindow: number;
+          estimatedUsed: number;
+          estimatedRemaining: number;
+          utilizationPercent: number;
+          apiUsage: { totalCost: number; totalTokens: number; requestCount: number };
+        };
+        const util = s.utilizationPercent;
+        parts.push(`${Math.round(s.estimatedUsed / 1000)}k/${Math.round(s.contextWindow / 1000)}k ctx (${util}%)`);
+        if (s.apiUsage?.totalCost > 0) {
+          parts.push(`$${s.apiUsage.totalCost.toFixed(4)}`);
+        }
+        process.stdout.write(`\n${gray}─── ${parts.join(" · ")} ───${reset}\n`);
+        process.stdout.write("> ");
+      });
       break;
     }
 
@@ -240,6 +264,12 @@ async function readRhoOutput() {
       if (!line.trim()) continue;
       try {
         const msg = JSON.parse(line);
+        // Route responses to pending request callbacks
+        if (msg.id && pendingRequests.has(msg.id)) {
+          pendingRequests.get(msg.id)!(msg.result);
+          pendingRequests.delete(msg.id);
+          continue;
+        }
         handleRhoMessage(msg);
       } catch {
         console.error("[parse error]", line);
