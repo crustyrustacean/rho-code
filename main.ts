@@ -2,6 +2,7 @@
 // Spawns rho in headless JSON-RPC mode, provides an interactive REPL
 
 const RHO_BIN = "rho";
+const continueSession = Deno.args.includes("-c");
 
 // ── ANSI helpers ─────────────────────────────────────────────────────────────────
 
@@ -25,7 +26,7 @@ let inReasoning = false;
 // ── Spawn rho ──────────────────────────────────────────────────────────────────
 
 const command = new Deno.Command(RHO_BIN, {
-  args: ["--accept-external-provider"],
+  args: ["--accept-external-provider", ...(continueSession ? ["--continue"] : [])],
   stdin: "piped",
   stdout: "piped",
   stderr: "inherit",
