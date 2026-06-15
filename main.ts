@@ -13,6 +13,10 @@ const yellow = "\x1b[33m";
 const red = "\x1b[31m";
 const cyan = "\x1b[36m";
 const gray = "\x1b[90m";
+const italic = "\x1b[3m";
+const underline = "\x1b[4m";
+const codeBg = "\x1b[48;5;236m";
+const codeFg = "\x1b[38;5;252m";
 
 // ── State ──────────────────────────────────────────────────────────────────────
 
@@ -22,6 +26,78 @@ const readyPromise = new Promise<void>((r) => {
   readyResolve = r;
 });
 let inReasoning = false;
+
+// ── Markdown streaming formatter ────────────────────────────────────────────
+// Buffers partial lines and applies ANSI formatting to complete lines as
+// they arrive via message/delta. Handles headers, bold, italic, inline code,
+// and fenced code blocks.
+
+let lineBuffer = "";
+let inCodeBlock = false;
+
+const RE_CODE_BLOCK = /^\s{0,3}```/;
+const RE_INLINE_CODE = /\x60([^\x60]+)\x60/g;
+const RE_BOLD = /\*\*([^*]+)\*\*/g;
+const RE_ITALIC = /(?<!\*)\*([^*]+)\*(?!\*)/g;
+const RE_HEADING = /^(#{1,6})\s+(.*)$/;
+
+function flushFormattedLine(line: string) {
+  if (inCodeBlock) {
+    if (RE_CODE_BLOCK.test(line)) {
+      inCodeBlock = false;
+      process.stdout.write(reset + "\n");
+    } else {
+      process.stdout.write(codeBg + codeFg + line + reset + "\n");
+    }
+    return;
+  }
+
+  if (RE_CODE_BLOCK.test(line)) {
+    inCodeBlock = true;
+    return;
+  }
+
+  if (line === "") {
+    process.stdout.write("\n");
+    return;
+  }
+
+  const headingMatch = line.match(RE_HEADING);
+  if (headingMatch) {
+    const level = headingMatch[1]!.length;
+    const text = headingMatch[2]!;
+    if (level === 1) process.stdout.write(bold + cyan + text + reset + "\n");
+    else if (level === 2) process.stdout.write(bold + underline + text + reset + "\n");
+    else process.stdout.write(bold + text + reset + "\n");
+    return;
+  }
+
+  let formatted = line;
+  formatted = formatted.replace(RE_INLINE_CODE, (_m, p1) => codeBg + codeFg + p1 + reset);
+  formatted = formatted.replace(RE_BOLD, (_m, p1) => bold + p1 + reset);
+  formatted = formatted.replace(RE_ITALIC, (_m, p1) => italic + p1 + reset);
+  process.stdout.write(formatted + "\n");
+}
+
+function writeMarkdownChunk(delta: string) {
+  lineBuffer += delta;
+  const lines = lineBuffer.split("\n");
+  lineBuffer = lines.pop() ?? "";
+  for (const line of lines) {
+    flushFormattedLine(line);
+  }
+}
+
+function flushMarkdownBuffer() {
+  if (lineBuffer.length > 0) {
+    flushFormattedLine(lineBuffer);
+    lineBuffer = "";
+  }
+  if (inCodeBlock) {
+    inCodeBlock = false;
+    process.stdout.write(reset + "\n");
+  }
+}
 
 // ── Spawn rho ──────────────────────────────────────────────────────────────────
 
@@ -72,28 +148,15 @@ function requestResponse(method: string, params: Record<string, unknown> = {}): 
 function formatToolArgs(args: string): string {
   try {
     const parsed = JSON.parse(args);
-    // For path-only tools, just show the path
-    if (parsed.path && Object.keys(parsed).length === 1) {
-      return parsed.path;
-    }
-    // For edit_file, show path + edit count
+    if (parsed.path && Object.keys(parsed).length === 1) return parsed.path;
     if (parsed.path && Array.isArray(parsed.edits)) {
-      return `${parsed.path} (${parsed.edits.length} edit${
-        parsed.edits.length !== 1 ? "s" : ""
-      })`;
+      return `${parsed.path} (${parsed.edits.length} edit${parsed.edits.length !== 1 ? "s" : ""})`;
     }
-    // For run_command, show the command
     if (parsed.command) {
-      const cmd = parsed.command.length > 60
-        ? parsed.command.slice(0, 57) + "..."
-        : parsed.command;
+      const cmd = parsed.command.length > 60 ? parsed.command.slice(0, 57) + "..." : parsed.command;
       return cmd;
     }
-    // For search, show the pattern
-    if (parsed.pattern) {
-      return `/${parsed.pattern}/`;
-    }
-    // Fallback: show key=value pairs
+    if (parsed.pattern) return `/${parsed.pattern}/`;
     return Object.entries(parsed)
       .filter(([k]) => k !== "path")
       .slice(0, 3)
@@ -104,26 +167,20 @@ function formatToolArgs(args: string): string {
   }
 }
 
-// ── Handle JSON-RPC message from rho ──────────────────────────────────────────
+// ── Handle JSON-RPC message from rho ──────────────────────────────────────
 
 function handleRhoMessage(msg: Record<string, unknown>) {
-  // JSON-RPC responses have "id"
   if (msg.id) {
-    if (msg.error) {
-      console.error(`${red}[error]${reset} ${JSON.stringify(msg.error)}`);
-    }
+    if (msg.error) console.error(`${red}[error]${reset} ${JSON.stringify(msg.error)}`);
     return;
   }
 
-  // JSON-RPC notifications have "method" (no "id")
   const method = msg.method as string;
   const params = msg.params as Record<string, unknown>;
 
   switch (method) {
     case "ready":
-      console.log(
-        `\n${bold}rho-code${reset} — interactive frontend for rho-coding-agent`,
-      );
+      console.log(`\n${bold}rho-code${reset} — interactive frontend for rho-coding-agent`);
       console.log(`${gray}Type a message, /quit to exit, /abort to cancel.${reset}\n`);
       process.stdout.write("> ");
       readyResolve();
@@ -141,15 +198,15 @@ function handleRhoMessage(msg: Record<string, unknown>) {
       break;
 
     case "message/delta":
-      // Close any open reasoning block
       if (inReasoning) {
         inReasoning = false;
         process.stdout.write(`${reset}\n\n`);
       }
-      process.stdout.write(params.delta as string);
+      writeMarkdownChunk(params.delta as string);
       break;
 
     case "reasoning/delta":
+      flushMarkdownBuffer();
       if (!inReasoning) {
         inReasoning = true;
         process.stdout.write(`${gray}┌ thinking${reset}\n${dim}`);
@@ -158,7 +215,7 @@ function handleRhoMessage(msg: Record<string, unknown>) {
       break;
 
     case "tool/call": {
-      // Close any open reasoning block
+      flushMarkdownBuffer();
       if (inReasoning) {
         inReasoning = false;
         process.stdout.write(`${reset}\n`);
@@ -171,11 +228,7 @@ function handleRhoMessage(msg: Record<string, unknown>) {
 
     case "tool/result": {
       const isError = params.is_error as boolean;
-      process.stdout.write(
-        isError
-          ? ` ${red}✗${reset}\n`
-          : ` ${gray}✓${reset}\n`,
-      );
+      process.stdout.write(isError ? ` ${red}✗${reset}\n` : ` ${gray}✓${reset}\n`);
       break;
     }
 
@@ -186,9 +239,7 @@ function handleRhoMessage(msg: Record<string, unknown>) {
     case "approval/request": {
       const risk = params.risk as string;
       const riskColor = risk === "destructive" ? red : risk === "network" ? yellow : gray;
-      console.log(
-        `\n${red}⚠${reset} ${bold}Approval required${reset} ${riskColor}[${risk}]${reset}`,
-      );
+      console.log(`\n${red}⚠${reset} ${bold}Approval required${reset} ${riskColor}[${risk}]${reset}`);
       console.log(`  ${cyan}${params.tool}${reset} ${gray}${formatToolArgs(params.arguments as string)}${reset}`);
       process.stdout.write(`  ${gray}Allow? [y/n]${reset} `);
       resolveApproval = (approved: boolean) => {
@@ -202,24 +253,18 @@ function handleRhoMessage(msg: Record<string, unknown>) {
       break;
 
     case "agent/end": {
+      flushMarkdownBuffer();
       const dur = params.durationMs as number;
       const iters = params.iterations as number;
       const toolCalls = params.toolCalls as Array<{ name: string; outcome: { kind: string } }>;
-      const usage = params.usage as { totalCost: number; totalTokens: number };
 
-      // Build summary line
       const parts: string[] = [];
       if (iters > 1) parts.push(`${iters} iterations`);
       if (toolCalls && toolCalls.length > 0) {
         parts.push(`${toolCalls.length} tool call${toolCalls.length !== 1 ? "s" : ""}`);
       }
-      if (dur > 1000) {
-        parts.push(`${(dur / 1000).toFixed(1)}s`);
-      } else {
-        parts.push(`${dur}ms`);
-      }
+      parts.push(dur > 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`);
 
-      // Fetch session stats asynchronously and append context info
       requestResponse("getSessionStats").then((stats) => {
         const s = stats as {
           contextWindow: number;
@@ -228,11 +273,8 @@ function handleRhoMessage(msg: Record<string, unknown>) {
           utilizationPercent: number;
           apiUsage: { totalCost: number; totalTokens: number; requestCount: number };
         };
-        const util = s.utilizationPercent;
-        parts.push(`${Math.round(s.estimatedUsed / 1000)}k/${Math.round(s.contextWindow / 1000)}k ctx (${util}%)`);
-        if (s.apiUsage?.totalCost > 0) {
-          parts.push(`$${s.apiUsage.totalCost.toFixed(4)}`);
-        }
+        parts.push(`${Math.round(s.estimatedUsed / 1000)}k/${Math.round(s.contextWindow / 1000)}k ctx (${s.utilizationPercent}%)`);
+        if (s.apiUsage?.totalCost > 0) parts.push(`$${s.apiUsage.totalCost.toFixed(4)}`);
         process.stdout.write(`\n${gray}─── ${parts.join(" · ")} ───${reset}\n`);
         process.stdout.write("> ");
       });
@@ -249,7 +291,7 @@ function handleRhoMessage(msg: Record<string, unknown>) {
   }
 }
 
-// ── Read rho's stdout (JSON-RPC notifications) ─────────────────────────────────
+// ── Read rho's stdout (JSON-RPC notifications) ─────────────────────────────
 
 async function readRhoOutput() {
   const decoder = new TextDecoder();
@@ -264,7 +306,6 @@ async function readRhoOutput() {
       if (!line.trim()) continue;
       try {
         const msg = JSON.parse(line);
-        // Route responses to pending request callbacks
         if (msg.id && pendingRequests.has(msg.id)) {
           pendingRequests.get(msg.id)!(msg.result);
           pendingRequests.delete(msg.id);
@@ -278,7 +319,7 @@ async function readRhoOutput() {
   }
 }
 
-// ── Read user input from terminal ───────────────────────────────────────────────
+// ── Read user input from terminal ───────────────────────────────────────────
 
 async function readUserInput() {
   await readyPromise;
@@ -287,33 +328,31 @@ async function readUserInput() {
 
   while (true) {
     const n = await Deno.stdin.read(buf);
-    if (n === null) break; // EOF (Ctrl+D)
+    if (n === null) break;
     const line = new TextDecoder().decode(buf.subarray(0, n)).trim();
-    const trimmed = line.trim();
 
-    if (!trimmed) continue;
+    if (!line) continue;
 
-    if (trimmed === "/quit" || trimmed === "/q") {
+    if (line === "/quit" || line === "/q") {
       child.kill("SIGTERM");
       break;
     }
 
-    if (trimmed === "/abort") {
+    if (line === "/abort") {
       sendRequest("abort");
       continue;
     }
 
-    // Route to approval handler if rho is waiting for one
     if (resolveApproval) {
-      const approved = trimmed === "y" || trimmed === "yes";
+      const approved = line === "y" || line === "yes";
       resolveApproval(approved);
       continue;
     }
 
-    sendRequest("prompt", { message: trimmed });
+    sendRequest("prompt", { message: line });
   }
 }
 
-// ── Run both loops concurrently ────────────────────────────────────────────────
+// ── Run both loops concurrently ────────────────────────────────────────────
 
 await Promise.all([readRhoOutput(), readUserInput()]);
