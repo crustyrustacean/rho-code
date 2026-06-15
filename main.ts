@@ -25,7 +25,7 @@ let inReasoning = false;
 // ── Spawn rho ──────────────────────────────────────────────────────────────────
 
 const command = new Deno.Command(RHO_BIN, {
-  args: ["--ephemeral", "--accept-external-provider"],
+  args: ["--accept-external-provider"],
   stdin: "piped",
   stdout: "piped",
   stderr: "inherit",
