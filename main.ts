@@ -13,6 +13,7 @@ const yellow = "\x1b[33m";
 const red = "\x1b[31m";
 const cyan = "\x1b[36m";
 const gray = "\x1b[90m";
+const green = "\x1b[32m";
 const italic = "\x1b[3m";
 const underline = "\x1b[4m";
 const codeBg = "\x1b[48;5;236m";
@@ -26,6 +27,8 @@ const readyPromise = new Promise<void>((r) => {
   readyResolve = r;
 });
 let inReasoning = false;
+let currentModel = "";
+let currentProvider = "";
 
 // ── Markdown streaming formatter ────────────────────────────────────────────
 // Buffers partial lines and applies ANSI formatting to complete lines as
@@ -180,10 +183,21 @@ function handleRhoMessage(msg: Record<string, unknown>) {
 
   switch (method) {
     case "ready":
-      console.log(`\n${bold}rho-code${reset} — interactive frontend for rho-coding-agent`);
-      console.log(`${gray}Type a message, /quit to exit, /abort to cancel.${reset}\n`);
-      process.stdout.write("> ");
-      readyResolve();
+      // Fetch model/provider state before showing the banner.
+      requestResponse("getState").then((state) => {
+        const s = state as { model: string; provider: string; cwd: string };
+        currentModel = s.model;
+        currentProvider = s.provider;
+        console.log(`\n${bold}rho-code${reset} — interactive frontend for rho-coding-agent`);
+        console.log(`${gray}Type a message, /quit to exit, /abort to cancel.${reset}`);
+        console.log(`${gray}Commands: /model, /models, /providers, /compact, /abort${reset}`);
+        console.log(
+          `${cyan}${s.model}${reset} ${gray}(${s.provider || "default provider"})${reset}`,
+        );
+        console.log(`${dim}${s.cwd}${reset}\n`);
+        process.stdout.write("> ");
+        readyResolve();
+      });
       break;
 
     case "state/change":
@@ -259,6 +273,7 @@ function handleRhoMessage(msg: Record<string, unknown>) {
       const toolCalls = params.toolCalls as Array<{ name: string; outcome: { kind: string } }>;
 
       const parts: string[] = [];
+      parts.push(`${cyan}${currentModel}${reset}`);
       if (iters > 1) parts.push(`${iters} iterations`);
       if (toolCalls && toolCalls.length > 0) {
         parts.push(`${toolCalls.length} tool call${toolCalls.length !== 1 ? "s" : ""}`);
@@ -289,6 +304,75 @@ function handleRhoMessage(msg: Record<string, unknown>) {
     default:
       console.log(`[${method}]`, JSON.stringify(params));
   }
+}
+
+// ── Slash commands ──────────────────────────────────────────────────────────
+
+async function cmdModel(args: string) {
+  if (!args) {
+    // Show current model
+    const state = await requestResponse("getState") as { model: string; provider: string };
+    console.log(`${cyan}${state.model}${reset} ${gray}(provider: ${state.provider || "default"})${reset}`);
+    return;
+  }
+
+  // Switch model
+  const result = await requestResponse("setModel", { model: args }) as { model: string; provider: string };
+  currentModel = result.model;
+  currentProvider = result.provider;
+  console.log(`${green}switched${reset} to ${cyan}${result.model}${reset} ${gray}(provider: ${result.provider || "default"})${reset}`);
+}
+
+async function cmdModels() {
+  const result = await requestResponse("listModels") as { models: Array<{ id: string; provider: string }> };
+  if (result.models.length === 0) {
+    console.log(`${gray}no models discovered (providers may not support /v1/models)${reset}`);
+    return;
+  }
+  // Group by provider
+  const byProvider = new Map<string, string[]>();
+  for (const m of result.models) {
+    const list = byProvider.get(m.provider) ?? [];
+    list.push(m.id);
+    byProvider.set(m.provider, list);
+  }
+  for (const [provider, models] of byProvider) {
+    console.log(`\n${bold}${provider}${reset}`);
+    for (const id of models) {
+      const marker = id === currentModel ? `${green}●${reset} ` : "  ";
+      console.log(`  ${marker}${id}`);
+    }
+  }
+  console.log("");
+}
+
+async function cmdProviders() {
+  const result = await requestResponse("listProviders") as {
+    providers: Array<{ name: string; isExternal: boolean; reachable: boolean; active: boolean }>;
+  };
+  if (result.providers.length === 0) {
+    console.log(`${gray}no providers configured${reset}`);
+    return;
+  }
+  for (const p of result.providers) {
+    const active = p.active ? `${green}●${reset} ` : "  ";
+    const external = p.isExternal ? `${yellow}external${reset}` : `${dim}local${reset}`;
+    const reachable = p.reachable ? `${green}reachable${reset}` : `${red}unreachable${reset}`;
+    console.log(`  ${active}${bold}${p.name}${reset} ${gray}${external} · ${reachable}${reset}`);
+  }
+  console.log("");
+}
+
+function printHelp() {
+  console.log(`
+${bold}Commands${reset}
+  ${cyan}/model${reset} [${italic}id${italic}]     Show or switch the active model
+  ${cyan}/models${reset}            List models from all providers
+  ${cyan}/providers${reset}         List configured providers
+  ${cyan}/compact${reset}           Compact conversation context
+  ${cyan}/abort${reset}             Cancel the current agent turn
+  ${cyan}/quit${reset}              Exit rho-code
+`);
 }
 
 // ── Read rho's stdout (JSON-RPC notifications) ─────────────────────────────
@@ -346,6 +430,36 @@ async function readUserInput() {
     if (resolveApproval) {
       const approved = line === "y" || line === "yes";
       resolveApproval(approved);
+      continue;
+    }
+
+    // ── Slash commands ────────────────────────────────────────────────
+    if (line.startsWith("/")) {
+      const spaceIdx = line.indexOf(" ");
+      const cmd = spaceIdx === -1 ? line : line.slice(0, spaceIdx);
+      const args = spaceIdx === -1 ? "" : line.slice(spaceIdx + 1).trim();
+
+      switch (cmd) {
+        case "/model":
+          await cmdModel(args);
+          break;
+        case "/models":
+          await cmdModels();
+          break;
+        case "/providers":
+          await cmdProviders();
+          break;
+        case "/compact":
+          sendRequest("compact");
+          console.log(`${gray}compaction requested${reset}`);
+          break;
+        case "/help":
+          printHelp();
+          break;
+        default:
+          console.log(`${red}unknown command: ${cmd}${reset}  type ${cyan}/help${reset} for available commands`);
+      }
+      process.stdout.write("> ");
       continue;
     }
 
