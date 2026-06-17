@@ -122,8 +122,10 @@ if (!childStdin || !childStdout) {
 
 // ── Send JSON-RPC request to rho ──────────────────────────────────────────────
 
-// Pending request-response callbacks, keyed by JSON-RPC id.
-const pendingRequests = new Map<string, (result: unknown) => void>();
+// Pending request-response callbacks, keyed by JSON-RPC id. The callback
+// receives the full response object so it can distinguish a success
+// `result` from an `error` and reject the promise accordingly.
+const pendingRequests = new Map<string, (msg: Record<string, unknown>) => void>();
 
 function sendRequest(method: string, params: Record<string, unknown> = {}): string {
   const id = crypto.randomUUID();
@@ -140,9 +142,15 @@ function sendRequest(method: string, params: Record<string, unknown> = {}): stri
 }
 
 function requestResponse(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const id = sendRequest(method, params);
-    pendingRequests.set(id, resolve);
+    pendingRequests.set(id, (msg) => {
+      if (msg.error) {
+        reject(msg.error);
+      } else {
+        resolve(msg.result);
+      }
+    });
   });
 }
 
@@ -190,12 +198,15 @@ function handleRhoMessage(msg: Record<string, unknown>) {
         currentProvider = s.provider;
         console.log(`\n${bold}rho-code${reset} — interactive frontend for rho-coding-agent`);
         console.log(`${gray}Type a message, /quit to exit, /abort to cancel.${reset}`);
-        console.log(`${gray}Commands: /model, /models, /providers, /compact, /abort${reset}`);
+        console.log(`${gray}Commands: /model, /models, /providers, /compact, /reload, /abort${reset}`);
         console.log(
           `${cyan}${s.model}${reset} ${gray}(${s.provider || "default provider"})${reset}`,
         );
         console.log(`${dim}${s.cwd}${reset}\n`);
         process.stdout.write("> ");
+        readyResolve();
+      }).catch((e) => {
+        console.error(`${red}[error]${reset} failed to fetch state: ${JSON.stringify(e)}`);
         readyResolve();
       });
       break;
@@ -292,6 +303,10 @@ function handleRhoMessage(msg: Record<string, unknown>) {
         if (s.apiUsage?.totalCost > 0) parts.push(`$${s.apiUsage.totalCost.toFixed(4)}`);
         process.stdout.write(`\n${gray}─── ${parts.join(" · ")} ───${reset}\n`);
         process.stdout.write("> ");
+      }).catch((e) => {
+        process.stdout.write(`\n${gray}─── ${parts.join(" · ")} ───${reset}\n`);
+        process.stdout.write("> ");
+        console.error(`${red}[error]${reset} failed to fetch session stats: ${JSON.stringify(e)}`);
       });
       break;
     }
@@ -316,11 +331,19 @@ async function cmdModel(args: string) {
     return;
   }
 
-  // Switch model
-  const result = await requestResponse("setModel", { model: args }) as { model: string; provider: string };
-  currentModel = result.model;
-  currentProvider = result.provider;
-  console.log(`${green}switched${reset} to ${cyan}${result.model}${reset} ${gray}(provider: ${result.provider || "default"})${reset}`);
+  // Switch model. The backend rejects unknown models/providers with a
+  // JSON-RPC error (see `App::set_model`); surface that as a failed switch
+  // instead of falsely reporting success.
+  try {
+    const result = await requestResponse("setModel", { model: args }) as { model: string; provider: string };
+    currentModel = result.model;
+    currentProvider = result.provider;
+    console.log(`${green}switched${reset} to ${cyan}${result.model}${reset} ${gray}(provider: ${result.provider || "default"})${reset}`);
+  } catch (e) {
+    const message = (e as { message?: string })?.message ?? JSON.stringify(e);
+    console.log(`${red}not switched${reset}: ${message}`);
+    console.log(`${gray}(model left unchanged)${reset}`);
+  }
 }
 
 async function cmdModels() {
@@ -366,13 +389,23 @@ async function cmdProviders() {
 function printHelp() {
   console.log(`
 ${bold}Commands${reset}
-  ${cyan}/model${reset} [${italic}id${italic}]     Show or switch the active model
+  ${cyan}/model${reset} [${italic}id${reset}]     Show or switch the active model
   ${cyan}/models${reset}            List models from all providers
   ${cyan}/providers${reset}         List configured providers
   ${cyan}/compact${reset}           Compact conversation context
+  ${cyan}/reload${reset}             Reload extensions
   ${cyan}/abort${reset}             Cancel the current agent turn
   ${cyan}/quit${reset}              Exit rho-code
 `);
+}
+
+async function cmdReload() {
+  const result = await requestResponse("reloadExtensions") as { success: boolean; message?: string };
+  if (result.success) {
+    console.log(`${green}extensions reloaded${reset}`);
+  } else {
+    console.log(`${red}reload failed${reset}: ${result.message || 'unknown error'}`);
+  }
 }
 
 // ── Read rho's stdout (JSON-RPC notifications) ─────────────────────────────
@@ -391,7 +424,7 @@ async function readRhoOutput() {
       try {
         const msg = JSON.parse(line);
         if (msg.id && pendingRequests.has(msg.id)) {
-          pendingRequests.get(msg.id)!(msg.result);
+          pendingRequests.get(msg.id)!(msg);
           pendingRequests.delete(msg.id);
           continue;
         }
@@ -439,25 +472,34 @@ async function readUserInput() {
       const cmd = spaceIdx === -1 ? line : line.slice(0, spaceIdx);
       const args = spaceIdx === -1 ? "" : line.slice(spaceIdx + 1).trim();
 
-      switch (cmd) {
-        case "/model":
-          await cmdModel(args);
-          break;
-        case "/models":
-          await cmdModels();
-          break;
-        case "/providers":
-          await cmdProviders();
-          break;
-        case "/compact":
-          sendRequest("compact");
-          console.log(`${gray}compaction requested${reset}`);
-          break;
-        case "/help":
-          printHelp();
-          break;
-        default:
-          console.log(`${red}unknown command: ${cmd}${reset}  type ${cyan}/help${reset} for available commands`);
+      try {
+        switch (cmd) {
+          case "/model":
+            await cmdModel(args);
+            break;
+          case "/models":
+            await cmdModels();
+            break;
+          case "/providers":
+            await cmdProviders();
+            break;
+          case "/compact":
+            sendRequest("compact");
+            console.log(`${gray}compaction requested${reset}`);
+            break;
+          case "/reload":
+            await cmdReload();
+            break;
+          case "/help":
+            printHelp();
+            break;
+          default:
+            console.log(`${red}unknown command: ${cmd}${reset}  type ${cyan}/help${reset} for available commands`);
+        }
+      } catch (e) {
+        // A rejected `requestResponse` (JSON-RPC error) from any command.
+        const message = (e as { message?: string })?.message ?? JSON.stringify(e);
+        console.log(`${red}error${reset}: ${message}`);
       }
       process.stdout.write("> ");
       continue;
