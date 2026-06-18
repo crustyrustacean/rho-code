@@ -1,9 +1,10 @@
 {
   "name": "rho-code",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Interactive REPL frontend for the rho coding agent",
   "license": "MIT",
   "author": "Jeff Mitchell",
+  "exports": "./main.ts",
   "tasks": {
     "dev": "deno run --allow-net --allow-run --allow-read main.ts",
     "watch": "deno run --watch --allow-net --allow-run --allow-read main.ts",
