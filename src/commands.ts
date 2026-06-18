@@ -200,6 +200,7 @@ export async function cmdStats() {
     compactedEntryCount: number;
     roleTokens: { system: number; user: number; assistant: number; tool: number };
     resolutionTokens: { full: number; outlined: number; summarized: number; pinned: number };
+    phaseTokens: { exploration: number; execution: number; verification: number; conclusion: number; unclassified: number };
     apiUsage: {
       totalInputTokens: number;
       totalOutputTokens: number;
@@ -230,6 +231,16 @@ export async function cmdStats() {
   if (rs && (rs.full + rs.outlined + rs.summarized + rs.pinned) > 0) {
     console.log(
       `  ${bold}Resolution${reset} ${gray}full ${k(rs.full)} · outlined ${k(rs.outlined)} · summarized ${k(rs.summarized)} · pinned ${k(rs.pinned)}${reset}`,
+    );
+  }
+  // Token breakdown by session phase — shows the shape of the work
+  // (exploration vs execution vs verification vs conclusion). Reveals, e.g.,
+  // a session stalled in exploration or bloated with verification churn.
+  const ph = s.phaseTokens;
+  if (ph && (ph.exploration + ph.execution + ph.verification + ph.conclusion + ph.unclassified) > 0) {
+    console.log(
+      `  ${bold}By phase${reset}    ${gray}explore ${k(ph.exploration)} · execute ${k(ph.execution)} · verify ${k(ph.verification)} · conclude ${k(ph.conclusion)}` +
+      (ph.unclassified > 0 ? ` · unclassified ${k(ph.unclassified)}` : ``) + `${reset}`,
     );
   }
   const compacted = s.compactedEntryCount ? ` ${gray}(${s.compactedEntryCount} compacted)${reset}` : "";

@@ -109,6 +109,27 @@ export function handleRhoMessage(msg: Record<string, unknown>) {
     case "agent/start":
       break;
 
+    case "usage": {
+      // Per-iteration live tick: a terse telemetry line so long multi-iteration
+      // turns show a context/cost gauge as they happen, not only at agent/end.
+      // Kept dim and one-line so it reads as status, not conversation content.
+      const u = params.usage as {
+        inputTokens: number; outputTokens: number; cost: number; requestCount: number;
+      };
+      const c = params.context as {
+        estimatedUsed: number; contextWindow: number; completionReserve: number;
+        utilizationPercent: number;
+      };
+      const budget = c.contextWindow - c.completionReserve;
+      const tick: string[] = [
+        `${dim}iter ${params.iteration}${reset}`,
+        `${Math.round(c.estimatedUsed / 1000)}k/${Math.round(budget / 1000)}k ctx (${c.utilizationPercent}%)`,
+      ];
+      if (u && u.cost > 0) tick.push(`$${u.cost.toFixed(4)}`);
+      process.stdout.write(`${gray}  · ${tick.join(" · ")}${reset}\n`);
+      break;
+    }
+
     case "agent/end": {
       flushMarkdownBuffer();
       const dur = params.durationMs as number;
