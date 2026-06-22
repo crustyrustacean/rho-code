@@ -32,7 +32,7 @@ export function handleRhoMessage(msg: Record<string, unknown>) {
         setCurrentModel(s.model);
         console.log(`\n${bold}rho-code${reset} — interactive frontend for rho-coding-agent`);
         console.log(`${gray}Type a message, /quit to exit, /abort to cancel.${reset}`);
-        console.log(`${gray}Commands: /model, /models, /providers, /stats, /tools, /extensions, /sessions, /messages, /clear, /resume, /compact, /reload, /abort${reset}`);
+        console.log(`${gray}Commands: /model, /models, /providers, /stats, /tools, /extensions, /sessions, /messages, /clear, /resume, /compact, /reload, /paste, /abort${reset}`);
         console.log(
           `${cyan}${s.model}${reset} ${gray}(${s.provider || "default provider"})${reset}`,
         );

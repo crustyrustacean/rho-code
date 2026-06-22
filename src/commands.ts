@@ -3,7 +3,7 @@
 
 import { dim, reset, bold, yellow, red, cyan, gray, green } from "./ansi.ts";
 import { sendRequest, requestResponse } from "./rpc.ts";
-import { currentModel, setCurrentModel } from "./state.ts";
+import { currentModel, setCurrentModel, setInPasteMode } from "./state.ts";
 
 // ── Command registry ────────────────────────────────────────────────────────
 // Single source of truth for slash commands: each entry drives both `/help`
@@ -43,6 +43,7 @@ export const commands: Command[] = [
   { name: "/resume", usage: "/resume <path>", help: "Resume a previous session", run: cmdResume },
   { name: "/compact", help: "Compact conversation context", run: compactRequest },
   { name: "/reload", help: "Reload extensions", run: cmdReload },
+  { name: "/paste", help: "Enter multi-line text (end with a lone .)", run: cmdPaste },
   { name: "/help", help: "Show this help", run: printHelp },
 ];
 
@@ -132,6 +133,12 @@ export async function cmdReload() {
   const result = await requestResponse("reloadExtensions") as { added: number; reloaded: number; removed: number; failed: number };
   console.log(`${green}extensions reloaded${reset} ${gray}(+${result.added} ~${result.reloaded} -${result.removed} !${result.failed})${reset}`);
 }
+
+export function cmdPaste() {
+  setInPasteMode(true);
+  console.log(`${dim}enter your text; type a lone . on a line to finish${reset}`);
+}
+
 
 export function cmdClear() {
   sendRequest("clear");

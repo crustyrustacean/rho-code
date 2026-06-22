@@ -1,11 +1,11 @@
 // The two concurrent I/O loops: reading rho's JSON-RPC stdout, and reading
 // user terminal input with slash-command dispatch.
 
-import { red, reset, cyan } from "./ansi.ts";
+import { red, reset, cyan, dim } from "./ansi.ts";
 import { dispatchResponse, getChild, getChildStdout, sendRequest } from "./rpc.ts";
 import { handleRhoMessage } from "./handler.ts";
 import { dispatchCommand } from "./commands.ts";
-import { readyPromise, resolveApproval } from "./state.ts";
+import { readyPromise, resolveApproval, inPasteMode, setInPasteMode } from "./state.ts";
 
 /** Read newline-delimited JSON-RPC from rho's stdout and dispatch. */
 export async function readRhoOutput() {
@@ -35,6 +35,8 @@ export async function readRhoOutput() {
 export async function readUserInput() {
   await readyPromise;
 
+  let pasteBuffer: string[] = [];
+
   // Stream stdin and split on newlines. This handles arbitrarily long lines
   // and multi-line pastes correctly — a fixed-size read buffer would silently
   // truncate anything longer than itself, losing the tail of a long input.
@@ -47,6 +49,23 @@ export async function readUserInput() {
     buffer = lines.pop() ?? ""; // keep partial trailing line
 
     for (const line of lines) {
+      // In paste mode, collect lines until the user enters a lone ".".
+      if (inPasteMode) {
+        if (line.trim() === ".") {
+          const text = pasteBuffer.join("\n");
+          if (!text.trim()) {
+            console.log(`${dim}paste cancelled (empty)${reset}`);
+          } else {
+            sendRequest("prompt", { message: text });
+          }
+          setInPasteMode(false);
+          process.stdout.write("> ");
+        } else {
+          pasteBuffer.push(line);
+        }
+        continue;
+      }
+
       const trimmed = line.trim();
       if (!trimmed) continue;
       if (!(await handleLine(trimmed))) return; // /quit

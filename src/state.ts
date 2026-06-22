@@ -25,3 +25,9 @@ export let currentModel = "";
 export function setCurrentModel(v: string) {
   currentModel = v;
 }
+
+/** True while collecting multi-line paste input. */
+export let inPasteMode = false;
+export function setInPasteMode(v: boolean) {
+  inPasteMode = v;
+}
