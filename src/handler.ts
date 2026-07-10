@@ -98,9 +98,20 @@ export function handleRhoMessage(msg: Record<string, unknown>) {
       const riskColor = risk === "destructive" ? red : risk === "network" ? yellow : gray;
       console.log(`\n${red}⚠${reset} ${bold}Approval required${reset} ${riskColor}[${risk}]${reset}`);
       console.log(`  ${cyan}${params.tool}${reset} ${gray}${formatToolArgs(params.arguments as string)}${reset}`);
-      process.stdout.write(`  ${gray}Allow? [y/n]${reset} `);
-      setResolveApproval((approved: boolean) => {
-        sendRequest("approvalResponse", { approved });
+      console.log(`${dim}  [y] allow · [n] deny · or type a redirect message${reset}`);
+      process.stdout.write(`  ${gray}>${reset} `);
+      setResolveApproval((decision: boolean | string | null) => {
+        if (decision === true) {
+          sendRequest("approvalResponse", { approved: true });
+        } else if (typeof decision === "string" && decision.trim()) {
+          // Redirect: deny with a message that becomes alternative instructions
+          // for the model. The agent loop injects this as a user turn and
+          // returns to Thinking so the model can re-plan.
+          sendRequest("approvalResponse", { approved: false, message: decision });
+        } else {
+          // Plain denial — no message, generic error fed to the model.
+          sendRequest("approvalResponse", { approved: false });
+        }
         setResolveApproval(null);
       });
       break;

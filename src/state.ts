@@ -1,9 +1,15 @@
 // Shared mutable state used across modules.
 
-/** Set when an approval/request notification arrives; cleared once answered. */
-export let resolveApproval: ((approved: boolean) => void) | null = null;
+/**
+ * Set when an approval/request notification arrives; cleared once answered.
+ *
+ * The callback receives the user's decision: `true` to approve, or a string
+ * (redirect message) to deny with alternative instructions. When the user
+ * denies without providing a message, the callback is called with `null`.
+ */
+export let resolveApproval: ((decision: boolean | string | null) => void) | null = null;
 export function setResolveApproval(
-  fn: ((approved: boolean) => void) | null,
+  fn: ((decision: boolean | string | null) => void) | null,
 ) {
   resolveApproval = fn;
 }

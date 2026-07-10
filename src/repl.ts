@@ -66,6 +66,7 @@ export async function readUserInput() {
         continue;
       }
 
+
       const trimmed = line.trim();
       if (!trimmed) continue;
       if (!(await handleLine(trimmed))) return; // /quit
@@ -95,7 +96,16 @@ async function handleLine(line: string): Promise<boolean> {
 
   // Approval mode intercepts all other input.
   if (resolveApproval) {
-    resolveApproval(line === "y" || line === "yes");
+    const lower = line.toLowerCase();
+    if (lower === "y" || lower === "yes") {
+      resolveApproval(true);
+    } else if (lower === "n" || lower === "no") {
+      resolveApproval(null);
+    } else {
+      // Anything else is a redirect message — deny the tool call but
+      // inject this text as alternative instructions for the model.
+      resolveApproval(line);
+    }
     return true;
   }
 
