@@ -9,6 +9,7 @@ import {
   setCurrentModel,
   setInReasoning,
   setResolveApproval,
+  setTurnInProgress,
 } from "./state.ts";
 import { flushMarkdownBuffer, writeMarkdownChunk } from "./markdown.ts";
 import { formatToolArgs } from "./format.ts";
@@ -32,6 +33,7 @@ export function handleRhoMessage(msg: Record<string, unknown>) {
         setCurrentModel(s.model);
         console.log(`\n${bold}rho-code${reset} — interactive frontend for rho-coding-agent`);
         console.log(`${gray}Type a message, /quit to exit, /abort to cancel.${reset}`);
+        console.log(`${gray}Messages sent while rho is working steer the current turn.${reset}`);
         console.log(`${gray}Commands: /model, /models, /providers, /stats, /tools, /extensions, /sessions, /messages, /clear, /resume, /compact, /reload, /paste, /abort${reset}`);
         console.log(
           `${cyan}${s.model}${reset} ${gray}(${s.provider || "default provider"})${reset}`,
@@ -118,6 +120,7 @@ export function handleRhoMessage(msg: Record<string, unknown>) {
     }
 
     case "agent/start":
+      setTurnInProgress(true);
       break;
 
     case "usage": {
@@ -142,6 +145,7 @@ export function handleRhoMessage(msg: Record<string, unknown>) {
     }
 
     case "agent/end": {
+      setTurnInProgress(false);
       flushMarkdownBuffer();
       const dur = params.durationMs as number;
       const iters = params.iterations as number;
@@ -191,6 +195,7 @@ export function handleRhoMessage(msg: Record<string, unknown>) {
     }
 
     case "agent/error":
+      setTurnInProgress(false);
       console.error(`\n${red}[error]${reset} ${params.error}`);
       process.stdout.write("> ");
       break;

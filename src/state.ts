@@ -37,3 +37,9 @@ export let inPasteMode = false;
 export function setInPasteMode(v: boolean) {
   inPasteMode = v;
 }
+
+/** True while an agent turn is in progress (between `agent/start` and `agent/end`). */
+export let turnInProgress = false;
+export function setTurnInProgress(v: boolean) {
+  turnInProgress = v;
+}

@@ -1,11 +1,11 @@
 // The two concurrent I/O loops: reading rho's JSON-RPC stdout, and reading
 // user terminal input with slash-command dispatch.
 
-import { red, reset, cyan, dim } from "./ansi.ts";
+import { red, reset, cyan, dim, gray } from "./ansi.ts";
 import { dispatchResponse, getChild, getChildStdout, sendRequest } from "./rpc.ts";
 import { handleRhoMessage } from "./handler.ts";
 import { dispatchCommand } from "./commands.ts";
-import { readyPromise, resolveApproval, inPasteMode, setInPasteMode } from "./state.ts";
+import { readyPromise, resolveApproval, inPasteMode, setInPasteMode, turnInProgress } from "./state.ts";
 
 /** Read newline-delimited JSON-RPC from rho's stdout and dispatch. */
 export async function readRhoOutput() {
@@ -56,7 +56,7 @@ export async function readUserInput() {
           if (!text.trim()) {
             console.log(`${dim}paste cancelled (empty)${reset}`);
           } else {
-            sendRequest("prompt", { message: text });
+            submitPrompt(text);
           }
           setInPasteMode(false);
           process.stdout.write("> ");
@@ -71,6 +71,21 @@ export async function readUserInput() {
       if (!trimmed) continue;
       if (!(await handleLine(trimmed))) return; // /quit
     }
+  }
+}
+
+/**
+ * Forward a prompt to rho. If a turn is in progress, the message is sent as a
+ * steering nudge (`steer: true`) — injected at the next tool-batch seam rather
+ * than queued as a separate turn. A one-line ack confirms it was accepted,
+ * since a steer produces no immediate agent output.
+ */
+function submitPrompt(message: string) {
+  if (turnInProgress) {
+    sendRequest("prompt", { message, steer: true });
+    console.log(`${gray}↳ steering the current turn…${reset}`);
+  } else {
+    sendRequest("prompt", { message });
   }
 }
 
@@ -130,7 +145,7 @@ async function handleLine(line: string): Promise<boolean> {
     return true;
   }
 
-  // Plain prompt: forward to rho.
-  sendRequest("prompt", { message: line });
+  // Plain prompt: forward to rho (steers if a turn is in progress).
+  submitPrompt(line);
   return true;
 }
