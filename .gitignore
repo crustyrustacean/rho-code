@@ -1,4 +1,8 @@
 .rho/
 .zed/
 logs/
-rho-code.exe
+
+# Compiled standalone binary produced by `deno task build`
+# (rho-code on Linux/macOS, rho-code.exe on Windows).
+/rho-code
+/rho-code.exe
