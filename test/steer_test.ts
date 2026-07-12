@@ -2,7 +2,7 @@
 // pure idle-vs-steer logic that `submitPrompt` applies; testing it directly
 // avoids the RPC transport and shared mutable state.
 
-import { buildPromptParams } from "../src/repl.ts";
+import { buildPromptParams } from "../src/prompt.ts";
 import { assertEquals } from "@std/assert";
 
 Deno.test("buildPromptParams: an idle message carries no steer flag", () => {

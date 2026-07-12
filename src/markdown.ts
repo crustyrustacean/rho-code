@@ -1,11 +1,24 @@
-// Streaming markdown formatter: buffers partial lines and applies ANSI
-// formatting to complete lines as they arrive via message/delta. Handles
-// headers, bold, italic, inline code, and fenced code blocks.
+// Streaming markdown formatter: buffers partial lines from message/delta and
+// applies ANSI formatting to complete lines as they arrive. Handles headers,
+// bold, italic, inline code, and fenced code blocks.
+//
+// Emits one finished line (with ANSI styling, no trailing newline) per call to
+// the configured sink. The TUI points the sink at the scrollback; tests can
+// point it at an array. Kept free of `process.stdout` so it composes with the
+// TUI's line-based output region.
 
 import { reset, bold, cyan, italic, underline, codeBg, codeFg } from "./ansi.ts";
 
 let lineBuffer = "";
 let inCodeBlock = false;
+
+/** Current sink for finished lines. Defaults to a no-op until configured. */
+let emit: (line: string) => void = () => {};
+
+/** Set where finished, styled lines are sent (e.g. the TUI scrollback). */
+export function setMarkdownSink(fn: (line: string) => void): void {
+  emit = fn;
+}
 
 const RE_CODE_BLOCK = /^\s{0,3}```/;
 const RE_INLINE_CODE = /\x60([^\x60]+)\x60/g;
@@ -13,13 +26,13 @@ const RE_BOLD = /\*\*([^*]+)\*\*/g;
 const RE_ITALIC = /(?<!\*)\*([^*]+)\*(?!\*)/g;
 const RE_HEADING = /^(#{1,6})\s+(.*)$/;
 
-function flushFormattedLine(line: string) {
+function flushFormattedLine(line: string): void {
   if (inCodeBlock) {
     if (RE_CODE_BLOCK.test(line)) {
       inCodeBlock = false;
-      process.stdout.write(reset + "\n");
+      emit(reset);
     } else {
-      process.stdout.write(codeBg + codeFg + line + reset + "\n");
+      emit(codeBg + codeFg + line + reset);
     }
     return;
   }
@@ -30,7 +43,7 @@ function flushFormattedLine(line: string) {
   }
 
   if (line === "") {
-    process.stdout.write("\n");
+    emit("");
     return;
   }
 
@@ -38,9 +51,9 @@ function flushFormattedLine(line: string) {
   if (headingMatch) {
     const level = headingMatch[1]!.length;
     const text = headingMatch[2]!;
-    if (level === 1) process.stdout.write(bold + cyan + text + reset + "\n");
-    else if (level === 2) process.stdout.write(bold + underline + text + reset + "\n");
-    else process.stdout.write(bold + text + reset + "\n");
+    if (level === 1) emit(bold + cyan + text + reset);
+    else if (level === 2) emit(bold + underline + text + reset);
+    else emit(bold + text + reset);
     return;
   }
 
@@ -48,10 +61,11 @@ function flushFormattedLine(line: string) {
   formatted = formatted.replace(RE_INLINE_CODE, (_m, p1) => codeBg + codeFg + p1 + reset);
   formatted = formatted.replace(RE_BOLD, (_m, p1) => bold + p1 + reset);
   formatted = formatted.replace(RE_ITALIC, (_m, p1) => italic + p1 + reset);
-  process.stdout.write(formatted + "\n");
+  emit(formatted);
 }
 
-export function writeMarkdownChunk(delta: string) {
+/** Feed a streaming delta; complete lines are flushed to the sink. */
+export function writeMarkdownChunk(delta: string): void {
   lineBuffer += delta;
   const lines = lineBuffer.split("\n");
   lineBuffer = lines.pop() ?? "";
@@ -60,13 +74,14 @@ export function writeMarkdownChunk(delta: string) {
   }
 }
 
-export function flushMarkdownBuffer() {
+/** Flush any buffered partial line and close an open code block. */
+export function flushMarkdownBuffer(): void {
   if (lineBuffer.length > 0) {
     flushFormattedLine(lineBuffer);
     lineBuffer = "";
   }
   if (inCodeBlock) {
     inCodeBlock = false;
-    process.stdout.write(reset + "\n");
+    emit(reset);
   }
 }
