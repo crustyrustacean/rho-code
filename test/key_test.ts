@@ -25,9 +25,9 @@ Deno.test("parseKey: multi-byte UTF-8 decodes as one char", () => {
   });
 });
 
-Deno.test("parseKey: Enter is CR or LF", () => {
+Deno.test("parseKey: Enter is CR; LF (Ctrl-J) inserts a newline", () => {
   expectKey([0x0d], { key: { kind: "enter" }, consumed: 1 });
-  expectKey([0x0a], { key: { kind: "enter" }, consumed: 1 });
+  expectKey([0x0a], { key: { kind: "newline" }, consumed: 1 });
 });
 
 Deno.test("parseKey: Backspace is DEL (0x7f) or BS (0x08)", () => {

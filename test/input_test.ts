@@ -95,19 +95,126 @@ Deno.test("InputEditor: Escape clears the current input", () => {
 });
 
 Deno.test("inputView: short text is shown in full with the cursor in place", () => {
-  assertEquals(inputView("abc", 1, 10), { view: "abc", col: 1 });
+  assertEquals(inputView("abc", 1, 10, 5), {
+    rows: ["abc"],
+    cursorRow: 0,
+    cursorCol: 1,
+  });
 });
 
-Deno.test("inputView: long text scrolls to keep the cursor visible at the right", () => {
-  // 10 chars, width 5, cursor at end (10) → show last 5, col 5.
-  assertEquals(inputView("0123456789", 10, 5), { view: "56789", col: 5 });
+Deno.test("inputView: long text wraps across rows; cursor at the end is visible", () => {
+  // 10 chars, width 5, maxRows 5 → wraps to ["01234","56789"]; cursor 10 → row 1.
+  assertEquals(inputView("0123456789", 10, 5, 5), {
+    rows: ["01234", "56789"],
+    cursorRow: 1,
+    cursorCol: 5,
+  });
 });
 
-Deno.test("inputView: cursor mid-string stays within the window", () => {
-  // 10 chars, width 5, cursor at 3 → window starts at max(0, 3-4)=0, col 3.
-  assertEquals(inputView("0123456789", 3, 5), { view: "01234", col: 3 });
+Deno.test("inputView: cursor mid-string stays on its wrapped row", () => {
+  assertEquals(inputView("0123456789", 3, 5, 5), {
+    rows: ["01234", "56789"],
+    cursorRow: 0,
+    cursorCol: 3,
+  });
 });
 
-Deno.test("inputView: zero width shows nothing", () => {
-  assertEquals(inputView("abc", 0, 0), { view: "", col: 0 });
+Deno.test("inputView: zero width or height shows nothing", () => {
+  assertEquals(inputView("abc", 0, 0, 5), {
+    rows: [],
+    cursorRow: 0,
+    cursorCol: 0,
+  });
+  assertEquals(inputView("abc", 1, 5, 0), {
+    rows: [],
+    cursorRow: 0,
+    cursorCol: 0,
+  });
+});
+
+// ── multi-line editor behavior ──────────────────────────────────────────────
+
+Deno.test("InputEditor: Ctrl-J inserts a newline", () => {
+  const ed = new InputEditor();
+  for (const c of "ab") ed.handle(char(c));
+  ed.handle(k("newline"));
+  ed.handle(char("c"));
+  assertEquals(ed.text, "ab\nc");
+  assertEquals(ed.cursor, 4);
+});
+
+Deno.test("InputEditor: arrow down/up move between lines preserving the column", () => {
+  const ed = new InputEditor();
+  for (const c of "abcd") ed.handle(char(c)); // "abcd", cursor 4
+  ed.handle(k("home")); // cursor 0
+  ed.handle(k("newline")); // "\nabcd", cursor 1 (start of 2nd line)
+  // layout: line0="" (col0), line1="abcd"; cursor at line1 col0
+  ed.handle(k("arrow", "up")); // → line0 col0
+  assertEquals(ed.cursor, 0);
+  ed.handle(k("arrow", "down")); // → line1 col0
+  assertEquals(ed.cursor, 1);
+});
+
+Deno.test("InputEditor: down clamps a long column to a shorter line's length", () => {
+  const ed = new InputEditor();
+  for (const c of "hello") ed.handle(char(c)); // line0 "hello"
+  ed.handle(k("newline")); // line1 ""
+  ed.handle(k("arrow", "up")); // → line0 end (cursor 5)
+  ed.handle(k("arrow", "down")); // line1 is empty → clamp to col 0 → cursor 6
+  assertEquals(ed.cursor, 6); // just past the \n
+});
+
+Deno.test("InputEditor: up on the first line and down on the last are no-ops", () => {
+  const ed = new InputEditor();
+  for (const c of "abc") ed.handle(char(c));
+  ed.handle(k("arrow", "up")); // first line → no-op
+  assertEquals(ed.cursor, 3);
+  ed.handle(k("arrow", "down")); // last line → no-op
+  assertEquals(ed.cursor, 3);
+});
+
+Deno.test("InputEditor: Home/End and Ctrl-A/E are line-local", () => {
+  const ed = new InputEditor();
+  for (const c of "ab\ncd") ed.handle(char(c)); // "ab\ncd", cursor 5 (end)
+  ed.handle(k("home")); // start of line1 → cursor 3
+  assertEquals(ed.cursor, 3);
+  ed.handle(k("ctrl", "a")); // start of line1 → cursor 3
+  assertEquals(ed.cursor, 3);
+  ed.handle(k("ctrl", "e")); // end of line1 → cursor 5
+  assertEquals(ed.cursor, 5);
+});
+
+Deno.test("InputEditor: backspace across a newline joins the lines", () => {
+  const ed = new InputEditor();
+  for (const c of "ab\ncd") ed.handle(char(c)); // cursor 5
+  ed.handle(k("home")); // cursor 3 (start of line1)
+  ed.handle(k("backspace")); // delete the \n → "abcd", cursor 2
+  assertEquals(ed.text, "abcd");
+  assertEquals(ed.cursor, 2);
+});
+
+Deno.test("InputEditor: Ctrl-K kills to the end of the current line only", () => {
+  const ed = new InputEditor();
+  for (const c of "ab\ncd") ed.handle(char(c)); // cursor 5
+  ed.handle(k("home")); // cursor 3
+  ed.handle(k("ctrl", "k")); // kill line1 "cd" → "ab\n", cursor 3
+  assertEquals(ed.text, "ab\n");
+  assertEquals(ed.cursor, 3);
+});
+
+Deno.test("inputView: multi-line text renders one row per line", () => {
+  assertEquals(inputView("ab\ncd", 5, 10, 5), {
+    rows: ["ab", "cd"],
+    cursorRow: 1,
+    cursorCol: 2,
+  });
+});
+
+Deno.test("inputView: windows to maxRows keeping the cursor visible", () => {
+  // 3 lines, maxRows 2, cursor at end of line 2 (row index 2) → show rows 1-2.
+  assertEquals(inputView("l0\nl1\nl2", 8, 10, 2), {
+    rows: ["l1", "l2"],
+    cursorRow: 1,
+    cursorCol: 2, // "l2" is 2 chars; cursor at 8 → col 8-6 = 2
+  });
 });

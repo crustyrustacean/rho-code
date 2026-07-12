@@ -56,6 +56,9 @@ import { Screen } from "./screen.ts";
 import { blockLines } from "./block.ts";
 import { buildFooter } from "./footer.ts";
 
+/** Maximum rows the input box may grow to before it scrolls internally. */
+const MAX_INPUT_ROWS = 5;
+
 /** Run the TUI until the user exits or rho dies. Requires a real terminal. */
 export async function runTui(): Promise<void> {
   if (!Deno.stdin.isTerminal()) {
@@ -126,14 +129,27 @@ class Tui {
   render(): void {
     const { rows, cols } = this.screen.size();
     const footerLines = this.footerLines(cols);
-    const outputHeight = Math.max(1, rows - footerLines.length - 1);
+    const footerH = footerLines.length;
+    const innerWidth = Math.max(1, cols - 4);
+    // Cap the input box so it never crowds out the output region (reserve one
+    // output row + the two border rows).
+    const maxInputRows = Math.max(
+      1,
+      Math.min(MAX_INPUT_ROWS, rows - footerH - 3),
+    );
+    const view = inputView(
+      this.editor.text,
+      this.editor.cursor,
+      innerWidth,
+      maxInputRows,
+    );
+    const outputHeight = Math.max(1, rows - footerH - view.rows.length - 2);
     this.scrollback.viewportHeight = outputHeight;
-    const { view, col } = inputView(this.editor.text, this.editor.cursor, cols);
     this.screen.render({
       lines: this.scrollback.visible(outputHeight, cols),
       footerLines,
-      input: view,
-      inputCol: col,
+      inputRows: view.rows,
+      inputCursor: { row: view.cursorRow, col: view.cursorCol },
     });
   }
 

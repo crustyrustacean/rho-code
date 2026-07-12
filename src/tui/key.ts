@@ -16,6 +16,7 @@ export interface Mods {
 export type Key =
   | { kind: "char"; char: string }
   | { kind: "enter" }
+  | { kind: "newline" }
   | { kind: "backspace" }
   | { kind: "delete" }
   | { kind: "tab" }
@@ -63,8 +64,11 @@ export function parseKey(buf: Uint8Array<ArrayBufferLike>): ParsedKey | null {
   // ── Single-byte control keys ──────────────────────────────────────────
   switch (b0) {
     case 0x0d:
-    case 0x0a:
       return { key: { kind: "enter" }, consumed: 1 };
+    case 0x0a:
+      // LF: Ctrl-J (or a pasted line feed) inserts a line break rather than
+      // submitting — Enter sends CR (0x0d) in raw mode.
+      return { key: { kind: "newline" }, consumed: 1 };
     case 0x7f:
     case 0x08:
       return { key: { kind: "backspace" }, consumed: 1 };
@@ -163,22 +167,13 @@ function keyFromCsi(finalByte: number, params: number[]): Key {
     case 0x46: // F
       return { kind: "end" };
     case 0x7e: { // ~
-      switch (params[0] ?? 0) {
-        case 3:
-          return { kind: "delete" };
-        case 5:
-          return { kind: "page", dir: "up" };
-        case 6:
-          return { kind: "page", dir: "down" };
-        case 1:
-        case 7:
-          return { kind: "home" };
-        case 4:
-        case 8:
-          return { kind: "end" };
-        default:
-          return { kind: "escape" };
-      }
+      const code = params[0] ?? 0;
+      if (code === 3) return { kind: "delete" };
+      if (code === 5) return { kind: "page", dir: "up" };
+      if (code === 6) return { kind: "page", dir: "down" };
+      if (code === 1 || code === 7) return { kind: "home" };
+      if (code === 4 || code === 8) return { kind: "end" };
+      return { kind: "escape" };
     }
     default:
       return { kind: "escape" };

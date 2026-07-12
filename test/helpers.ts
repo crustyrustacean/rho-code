@@ -17,6 +17,7 @@ export function k(
 ): Key {
   switch (kind) {
     case "enter":
+    case "newline":
     case "backspace":
     case "delete":
     case "tab":
