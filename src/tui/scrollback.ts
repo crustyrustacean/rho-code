@@ -76,6 +76,34 @@ export class Scrollback {
     }
   }
 
+  /** Replace the last `n` lines with `lines` (a multi-line block repaint).
+   *
+   * Used to live-update a tool-call block: the pending block is pushed, then
+   * repainted as success/error once the result arrives. When pinned to the
+   * bottom the view stays pinned; when scrolled up the view is kept over the
+   * same content (the offset tracks the net change in line count). */
+  replaceLastN(n: number, lines: string[]): void {
+    const wasAtBottom = this.atBottom;
+    const removeCount = Math.min(n, this.#lines.length);
+    if (removeCount > 0) {
+      this.#lines.splice(this.#lines.length - removeCount, removeCount);
+    }
+    for (const line of lines) {
+      this.#lines.push(line);
+      if (this.#lines.length > this.#maxLines) {
+        const excess = this.#lines.length - this.#maxLines;
+        this.#lines.splice(0, excess);
+      }
+      if (!wasAtBottom) this.#offset += 1;
+    }
+    if (!wasAtBottom) {
+      // The removal moved the bottom up by `removeCount`; counteract so a
+      // scrolled-up view keeps the same content in frame.
+      this.#offset = Math.max(0, this.#offset - removeCount);
+      this.#offset = Math.min(this.#offset, this.#maxOffset);
+    }
+  }
+
   /** The lines currently visible in a `height`-row window `cols` columns wide.
    *
    * Lines are wrapped to `cols` (ANSI-aware) and the view is bottom-anchored:

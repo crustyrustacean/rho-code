@@ -98,3 +98,47 @@ Deno.test("Scrollback: visible() bottom-anchors when a wrapped line overflows th
   // window height 2 → only the bottom two rows of the wrapped line.
   assertEquals(sb.visible(2, 5), [" worl", "d"]);
 });
+
+// ── replaceLastN: live-updating a multi-line block in place ───────────────
+
+Deno.test("Scrollback: replaceLastN swaps the last N lines for the new ones", () => {
+  const sb = filled(3); // [line 1, line 2, line 3]
+  sb.replaceLastN(1, ["CHANGED"]);
+  assertEquals(sb.visible(3, 80), ["line 1", "line 2", "CHANGED"]);
+});
+
+Deno.test("Scrollback: replaceLastN can grow or shrink the replaced region", () => {
+  const sb = filled(3);
+  sb.replaceLastN(2, ["a", "b", "c"]); // 2 → 3 lines (grow)
+  assertEquals(sb.visible(5, 80), ["line 1", "a", "b", "c"]);
+  sb.replaceLastN(3, ["z"]); // 3 → 1 line (shrink)
+  assertEquals(sb.visible(5, 80), ["line 1", "z"]);
+});
+
+Deno.test("Scrollback: replaceLastN clamps n to the number of stored lines", () => {
+  const sb = filled(2);
+  sb.replaceLastN(10, ["only"]);
+  assertEquals(sb.visible(5, 80), ["only"]);
+});
+
+Deno.test("Scrollback: replaceLastN on an empty buffer just appends", () => {
+  const sb = new Scrollback();
+  sb.replaceLastN(3, ["first"]);
+  assertEquals(sb.visible(5, 80), ["first"]);
+});
+
+Deno.test("Scrollback: replaceLastN re-pins to the bottom when already at bottom", () => {
+  const sb = filled(3);
+  sb.replaceLastN(1, ["new"]); // at bottom → stays at bottom
+  assertEquals(sb.atBottom, true);
+  assertEquals(sb.visible(2, 80), ["line 2", "new"]);
+});
+
+Deno.test("Scrollback: replaceLastN keeps a scrolled-up view over the same content", () => {
+  const sb = filled(5);
+  sb.viewportHeight = 2;
+  sb.scrollUp(2); // viewing lines 2-3, offset 2
+  sb.replaceLastN(1, ["new"]); // replace line 5 (off-screen) → view should not move
+  assertEquals(sb.visible(2, 80), ["line 2", "line 3"]);
+  assertEquals(sb.atBottom, false);
+});
