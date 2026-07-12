@@ -7,6 +7,8 @@
 // bottom; while scrolled up, pushes hold the view in place. Clamping needs the
 // viewport height, so the render loop sets it each frame.
 
+import { wrapLine } from "./wrap.ts";
+
 export interface ScrollbackOptions {
   /** Maximum lines retained; oldest are trimmed. Default 10_000. */
   maxLines?: number;
@@ -74,10 +76,17 @@ export class Scrollback {
     }
   }
 
-  /** The lines currently visible in a window of `height` rows. */
-  visible(height: number): string[] {
-    const end = this.#lines.length - this.#offset;
-    const start = Math.max(0, end - height);
-    return this.#lines.slice(start, end);
+  /** The lines currently visible in a `height`-row window `cols` columns wide.
+   *
+   * Lines are wrapped to `cols` (ANSI-aware) and the view is bottom-anchored:
+   * the newest content fills from the bottom up, accounting for the scroll
+   * offset (in logical lines). */
+  visible(height: number, cols: number): string[] {
+    const rows: string[] = [];
+    for (let i = this.#lines.length - this.#offset - 1; i >= 0; i--) {
+      if (rows.length >= height) break;
+      rows.unshift(...wrapLine(this.#lines[i]!, cols));
+    }
+    return rows.slice(-height);
   }
 }

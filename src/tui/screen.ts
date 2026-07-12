@@ -83,7 +83,9 @@ export class Screen {
     let buf = HOME;
     for (let r = 0; r < outputHeight; r++) {
       const line = frame.lines[r] ?? "";
-      buf += clip(line, cols) + reset + CLEAR_LINE + "\n";
+      // Output lines are pre-wrapped to `cols` visible width by the scrollback,
+      // so don't clip here — a raw slice would split ANSI escape sequences.
+      buf += line + reset + CLEAR_LINE + "\n";
     }
     buf += clip(frame.statusBar, cols) + reset + CLEAR_LINE + "\n";
     buf += clip(frame.input, inputWidth) + reset + CLEAR_LINE;

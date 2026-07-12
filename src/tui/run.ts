@@ -104,7 +104,7 @@ class Tui {
     this.scrollback.viewportHeight = outputHeight;
     const { view, col } = inputView(this.editor.text, this.editor.cursor, cols);
     this.screen.render({
-      lines: this.scrollback.visible(outputHeight),
+      lines: this.scrollback.visible(outputHeight, cols),
       statusBar: this.statusBar(),
       input: view,
       inputCol: col,
@@ -391,12 +391,15 @@ class Tui {
     }
   }
 
-  /** On `agent/end`: print the run summary and refresh context stats. */
-  onAgentEnd(params: Record<string, unknown>): void {
+  /** On `agent/end`: fetch stats, then print the full run summary (context +
+   * cost included) and refresh the status bar's context %. */
+  async onAgentEnd(params: Record<string, unknown>): Promise<void> {
     flushMarkdownBuffer();
     const dur = params.durationMs as number;
     const iters = params.iterations as number;
     const toolCalls = params.toolCalls as Array<{ name: string }> | undefined;
+    const finishReason = params.finishReason as string | undefined;
+
     const parts: string[] = [];
     parts.push(`${cyan}${currentModel}${reset}`);
     if (iters > 1) parts.push(`${iters} iterations`);
@@ -404,17 +407,36 @@ class Tui {
       parts.push(`${toolCalls.length} tool call${toolCalls.length !== 1 ? "s" : ""}`);
     }
     parts.push(dur > 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`);
-    this.push(`${gray}─── ${parts.join(" · ")} ───${reset}`);
+    if (finishReason && finishReason !== "stop") {
+      parts.push(`${yellow}${finishReason.replace(/_/g, " ")}${reset}`);
+    }
 
-    requestResponse("getSessionStats").then((stats) => {
-      const s = stats as { utilizationPercent?: number };
-      if (typeof s.utilizationPercent === "number") {
-        this.contextPct = String(s.utilizationPercent);
+    try {
+      const stats = await requestResponse("getSessionStats") as {
+        contextWindow: number;
+        completionReserve: number;
+        estimatedUsed: number;
+        utilizationPercent: number;
+        apiUsage: { totalCost: number; requestCount: number };
+      };
+      // Usable budget excludes the completion reserve, matching utilizationPercent.
+      const budget = stats.contextWindow - stats.completionReserve;
+      parts.push(
+        `${Math.round(stats.estimatedUsed / 1000)}k/${Math.round(budget / 1000)}k ctx (${stats.utilizationPercent}%)`,
+      );
+      // Always surface cost; "cost n/a" when requests ran but no pricing applied.
+      if (stats.apiUsage && stats.apiUsage.totalCost > 0) {
+        parts.push(`$${stats.apiUsage.totalCost.toFixed(4)}`);
+      } else if (stats.apiUsage && stats.apiUsage.requestCount > 0) {
+        parts.push(`${gray}cost n/a${reset}`);
       }
-      this.render();
-    }).catch(() => {
-      // Stats are best-effort; the summary line already printed.
-    });
+      this.contextPct = String(stats.utilizationPercent);
+    } catch {
+      // Stats are best-effort; the summary still prints without them.
+    }
+
+    this.push(`${gray}─── ${parts.join(" · ")} ───${reset}`);
+    this.render();
   }
 
   // ── Shutdown ──────────────────────────────────────────────────────────
