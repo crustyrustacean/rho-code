@@ -55,6 +55,7 @@ import { Scrollback } from "./scrollback.ts";
 import { Screen } from "./screen.ts";
 import { blockLines } from "./block.ts";
 import { buildFooter } from "./footer.ts";
+import { SPINNER_INTERVAL_MS, spinnerFrame } from "./spinner.ts";
 
 /** Maximum rows the input box may grow to before it scrolls internally. */
 const MAX_INPUT_ROWS = 5;
@@ -77,10 +78,11 @@ export async function runTui(): Promise<void> {
   console.error = (...args: unknown[]) =>
     tui.scrollback.push(red + args.join(" ") + reset);
 
-  // Re-render every 500ms while a turn runs so the footer's elapsed time ticks.
+  // Re-render at the spinner cadence while a turn runs so the footer's
+  // spinner animates and the elapsed time ticks.
   const tick = setInterval(() => {
     if (turnInProgress) tui.render();
-  }, 500);
+  }, SPINNER_INTERVAL_MS);
   try {
     tui.screen.enter();
     tui.render();
@@ -119,6 +121,9 @@ class Tui {
   // Footer chrome: working directory and git branch, refreshed on ready.
   cwd = "";
   gitBranch: string | undefined;
+  // Date.now() at the start of the current turn; 0 when idle. Drives the
+  // footer's elapsed-time + spinner while a turn runs.
+  turnStart = 0;
 
   push(line: string): void {
     this.scrollback.push(line);
@@ -170,6 +175,11 @@ class Tui {
       model: currentModel || "no-model",
       provider: undefined,
       showProvider: false,
+      working: turnInProgress && this.turnStart > 0,
+      elapsedMs: this.turnStart ? Date.now() - this.turnStart : 0,
+      spinner: turnInProgress && this.turnStart > 0
+        ? spinnerFrame(Date.now())
+        : undefined,
       width: cols,
     });
   }
@@ -331,6 +341,7 @@ class Tui {
         break;
 
       case "agent/start":
+        this.turnStart = Date.now();
         setTurnInProgress(true);
         break;
 
@@ -341,6 +352,7 @@ class Tui {
 
       case "agent/error":
         setTurnInProgress(false);
+        this.turnStart = 0;
         this.push(`${red}[error]${reset} ${params.error}`);
         break;
 
@@ -477,10 +489,11 @@ class Tui {
     }
   }
 
-  /** On `agent/end`: flush trailing markdown and refresh the context snapshot
-   * for the footer (per-iteration usage already accrued via `usage`). */
+  /** On `agent/end`: flush trailing markdown, freeze the turn clock, and
+   * refresh the context snapshot for the footer. */
   async onAgentEnd(_params: Record<string, unknown>): Promise<void> {
     flushMarkdownBuffer();
+    this.turnStart = 0; // stop the spinner / elapsed counter
     try {
       const stats = await requestResponse("getSessionStats") as {
         utilizationPercent?: number;

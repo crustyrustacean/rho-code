@@ -131,3 +131,22 @@ Deno.test("footer stats line: no token parts when usage is zero/absent", () => {
   assertEquals(text.includes("$0.000"), false);
   assertEquals(text.includes("0%/200k(auto)"), true);
 });
+
+Deno.test("footer stats line: a working spinner + elapsed leads the line", () => {
+  const [, stats] = buildFooter({
+    ...base,
+    working: true,
+    elapsedMs: 3200,
+    spinner: "\u280B",
+  });
+  const text = plain(stats);
+  assertEquals(text.startsWith("\u280B 3.2s"), true);
+  assertEquals(visibleWidth(stats), 80);
+  assertEquals(text.endsWith("claude-sonnet"), true);
+});
+
+Deno.test("footer stats line: no spinner when not working", () => {
+  const [, stats] = buildFooter({ ...base, working: false });
+  const text = plain(stats);
+  assertEquals(text.includes("\u280B"), false);
+});

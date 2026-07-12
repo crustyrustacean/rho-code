@@ -37,6 +37,12 @@ export interface FooterState {
   provider?: string;
   /** Prefix the model with `(provider)` when true. */
   showProvider?: boolean;
+  /** True while an agent turn is in progress → show the working spinner. */
+  working?: boolean;
+  /** Elapsed ms for the current turn (shown next to the spinner). */
+  elapsedMs?: number;
+  /** Spinner frame glyph (e.g. from spinnerFrame()) shown when `working`. */
+  spinner?: string;
   /** Terminal columns. */
   width: number;
 }
@@ -74,6 +80,10 @@ export function buildFooter(s: FooterState): string[] {
 /** Assemble the stats line: left token/cost/context parts, right-aligned model. */
 function buildStatsLine(s: FooterState): string {
   const parts: string[] = [];
+  if (s.working && s.spinner) {
+    const secs = ((s.elapsedMs ?? 0) / 1000).toFixed(1);
+    parts.push(`${yellow}${s.spinner}${reset} ${dim}${secs}s${reset}`);
+  }
   if (s.inputTokens) {
     parts.push(`${dim}↑${formatTokens(s.inputTokens)}${reset}`);
   }
