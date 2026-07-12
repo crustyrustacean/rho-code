@@ -5,9 +5,13 @@
   "license": "MIT",
   "author": "Jeff Mitchell",
   "exports": "./main.ts",
+  "imports": {
+    "@std/assert": "jsr:@std/assert@^1.0.19"
+  },
   "tasks": {
     "dev": "deno run --allow-net --allow-run --allow-read main.ts",
     "watch": "deno run --watch --allow-net --allow-run --allow-read main.ts",
-    "build": "deno compile --allow-run --allow-read main.ts -o rho-code"
+    "build": "deno compile --allow-run --allow-read main.ts -o rho-code",
+    "test": "deno test"
   }
 }

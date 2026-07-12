@@ -75,17 +75,28 @@ export async function readUserInput() {
 }
 
 /**
- * Forward a prompt to rho. If a turn is in progress, the message is sent as a
- * steering nudge (`steer: true`) — injected at the next tool-batch seam rather
- * than queued as a separate turn. A one-line ack confirms it was accepted,
- * since a steer produces no immediate agent output.
+ * Build the JSON-RPC `prompt` params for a user message. When a turn is in
+ * progress, the message is sent as a steering nudge (`steer: true`) — injected
+ * at the next tool-batch seam rather than queued as a separate turn. Extracted
+ * as pure logic so the idle-vs-steer decision is unit-testable without the
+ * transport or shared state.
+ */
+export function buildPromptParams(
+  message: string,
+  busy: boolean,
+): Record<string, unknown> {
+  return busy ? { message, steer: true } : { message };
+}
+
+/**
+ * Forward a prompt to rho, steering the active turn if one is in progress
+ * (see [`buildPromptParams`]). A one-line ack confirms a steer, since it
+ * produces no immediate agent output.
  */
 function submitPrompt(message: string) {
+  sendRequest("prompt", buildPromptParams(message, turnInProgress));
   if (turnInProgress) {
-    sendRequest("prompt", { message, steer: true });
     console.log(`${gray}↳ steering the current turn…${reset}`);
-  } else {
-    sendRequest("prompt", { message });
   }
 }
 

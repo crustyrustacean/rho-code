@@ -30,6 +30,12 @@ deno task build
 
 This produces an executable `rho-code` in the project directory.
 
+### Tests
+
+```sh
+deno task test
+```
+
 ## License
 
 MIT — see [LICENSE](./LICENSE) for details.
