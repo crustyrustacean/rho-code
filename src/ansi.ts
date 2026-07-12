@@ -12,3 +12,15 @@ export const italic = "\x1b[3m";
 export const underline = "\x1b[4m";
 export const codeBg = "\x1b[48;5;236m";
 export const codeFg = "\x1b[38;5;252m";
+
+// ── Backgrounds for pi-style message/tool blocks ────────────────────────
+// 256-color picks that read well on dark terminals. Each paints a full-width
+// block when padded out by `blockLines`.
+/** Soft tint behind echoed user messages (pi `userMessageBg`). */
+export const bgUser = "\x1b[48;5;239m";
+/** Pending/running tool call block (pi `toolPendingBg`). */
+export const bgToolPending = "\x1b[48;5;238m";
+/** Successful tool call block (pi `toolSuccessBg`). */
+export const bgToolSuccess = "\x1b[48;5;22m";
+/** Failed tool call block (pi `toolErrorBg`). */
+export const bgToolError = "\x1b[48;5;52m";
