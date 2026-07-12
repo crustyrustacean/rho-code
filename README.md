@@ -28,6 +28,8 @@ JSON-RPC mode and provides a terminal-based chat interface.
 - Markdown rendering for assistant messages (headings, bold/italic, code)
 - Type while rho works to steer the active turn
 - Interactive approval prompts for tool calls requiring confirmation
+- `/resume` opens an interactive session picker (↑↓ navigate, enter resume, esc
+  cancel); `/resume <path>` resumes by path
 - `/abort` to cancel an in-progress request, `/quit` (or `/q`, `/exit`) to exit;
   `/help` for the full command list
 - Compile to a standalone binary with `deno compile`
