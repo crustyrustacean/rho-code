@@ -5,6 +5,13 @@
 // The read loop feeds accumulated bytes to `parseKey`; when it returns `null`
 // the buffer holds an incomplete escape sequence and needs more bytes.
 
+/** Active key modifiers, present only when at least one is pressed. */
+export interface Mods {
+  shift: boolean;
+  alt: boolean;
+  ctrl: boolean;
+}
+
 /** A single decoded keystroke. */
 export type Key =
   | { kind: "char"; char: string }
@@ -13,7 +20,11 @@ export type Key =
   | { kind: "delete" }
   | { kind: "tab" }
   | { kind: "escape" }
-  | { kind: "arrow"; dir: "up" | "down" | "left" | "right" }
+  | {
+    kind: "arrow";
+    dir: "up" | "down" | "left" | "right";
+    mods?: Mods;
+  }
   | { kind: "home" }
   | { kind: "end" }
   | { kind: "page"; dir: "up" | "down" }
@@ -32,52 +43,20 @@ const ESC = 0x1b;
  *
  * Returns `null` when the buffer holds only an incomplete escape or multi-byte
  * sequence (the caller should wait for more bytes). A lone `ESC` is treated as
- * the Escape key; a split `\x1b[` sequence is a known v1 limitation (cbreak
- * mode delivers most CSIs as a single read).
+ * the Escape key. Full CSI sequences are parsed including xterm modifier
+ * parameters (`CSI 1;<mod><final>`), so Shift/Alt/Ctrl + arrow (and SS3
+ * app-cursor arrows) decode correctly.
  */
 export function parseKey(buf: Uint8Array<ArrayBufferLike>): ParsedKey | null {
   if (buf.length === 0) return null;
   const b0 = buf[0]!;
 
-  // ── Escape / CSI sequences ────────────────────────────────────────────
+  // ── Escape / CSI / SS3 sequences ──────────────────────────────────
   if (b0 === ESC) {
     if (buf.length === 1) return { key: { kind: "escape" }, consumed: 1 };
-    if (buf[1] === 0x5b) {
-      // CSI: ESC [
-      if (buf.length < 3) return null; // incomplete
-      const final = buf[2]!;
-      switch (final) {
-        case 0x41:
-          return { key: { kind: "arrow", dir: "up" }, consumed: 3 };
-        case 0x42:
-          return { key: { kind: "arrow", dir: "down" }, consumed: 3 };
-        case 0x43:
-          return { key: { kind: "arrow", dir: "right" }, consumed: 3 };
-        case 0x44:
-          return { key: { kind: "arrow", dir: "left" }, consumed: 3 };
-        case 0x48:
-          return { key: { kind: "home" }, consumed: 3 };
-        case 0x46:
-          return { key: { kind: "end" }, consumed: 3 };
-        case 0x33:
-        case 0x35:
-        case 0x36:
-          if (buf.length < 4) return null; // waiting for the `~`
-          if (buf[3] === 0x7e) {
-            if (final === 0x33) return { key: { kind: "delete" }, consumed: 4 };
-            return {
-              key: { kind: "page", dir: final === 0x35 ? "up" : "down" },
-              consumed: 4,
-            };
-          }
-          break;
-        default:
-          break; // unknown CSI final byte — fall through
-      }
-      // Unknown/unhandled CSI: consume the 3-byte form so the loop advances.
-      return { key: { kind: "escape" }, consumed: 3 };
-    }
-    // ESC not followed by '[': treat as a lone Escape.
+    if (buf[1] === 0x5b) return parseCsi(buf); // ESC [  — CSI
+    if (buf[1] === 0x4f) return parseSs3(buf); // ESC O  — SS3 (app-cursor)
+    // ESC + anything else: a lone Escape (leave the next byte buffered).
     return { key: { kind: "escape" }, consumed: 1 };
   }
 
@@ -122,5 +101,139 @@ function utf8Len(lead: number): number | null {
   if (lead >= 0xc2 && lead <= 0xdf) return 2;
   if (lead >= 0xe0 && lead <= 0xef) return 3;
   if (lead >= 0xf0 && lead <= 0xf4) return 4;
+  return null;
+}
+
+// ── CSI / SS3 decoding helpers ─────────────────────────────────────────────
+
+/** True for a CSI/SS3 final byte (0x40–0x7e). */
+function isFinalByte(b: number): boolean {
+  return b >= 0x40 && b <= 0x7e;
+}
+
+/** Decode a CSI sequence (`ESC [ params final`) into a Key, consuming the
+ * whole sequence including any modifier parameters. Returns `null` when the
+ * final byte hasn't arrived yet (the buffer is incomplete). */
+function parseCsi(buf: Uint8Array<ArrayBufferLike>): ParsedKey | null {
+  let i = 2;
+  let finalByte = -1;
+  while (i < buf.length) {
+    const b = buf[i]!;
+    i += 1;
+    if (isFinalByte(b)) {
+      finalByte = b;
+      break;
+    }
+  }
+  if (finalByte === -1) return null; // incomplete — wait for more bytes
+  const consumed = i;
+  const paramStr = new TextDecoder().decode(buf.subarray(2, consumed - 1));
+  const params = paramStr === "" ? [] : paramStr.split(";").map(Number);
+  return { key: keyFromCsi(finalByte, params), consumed };
+}
+
+/** Decode an SS3 sequence (`ESC O <final>`) — arrows/home/end in cursor-key
+ * application mode (common inside tmux/screen). Three bytes. */
+function parseSs3(buf: Uint8Array<ArrayBufferLike>): ParsedKey | null {
+  if (buf.length < 3) return null;
+  const finalByte = buf[2]!;
+  const key = arrowOrHomeEnd(finalByte);
+  return key ? { key, consumed: 3 } : { key: { kind: "escape" }, consumed: 3 };
+}
+
+/** Map a CSI final byte + parsed params to a Key. */
+function keyFromCsi(finalByte: number, params: number[]): Key {
+  switch (finalByte) {
+    case 0x41: // A
+    case 0x42: // B
+    case 0x43: // C
+    case 0x44: { // D
+      const dir = finalByte === 0x41
+        ? "up"
+        : finalByte === 0x42
+        ? "down"
+        : finalByte === 0x43
+        ? "right"
+        : "left";
+      const mods = modsFromParams(params);
+      return mods ? { kind: "arrow", dir, mods } : { kind: "arrow", dir };
+    }
+    case 0x48: // H
+      return { kind: "home" };
+    case 0x46: // F
+      return { kind: "end" };
+    case 0x7e: { // ~
+      switch (params[0] ?? 0) {
+        case 3:
+          return { kind: "delete" };
+        case 5:
+          return { kind: "page", dir: "up" };
+        case 6:
+          return { kind: "page", dir: "down" };
+        case 1:
+        case 7:
+          return { kind: "home" };
+        case 4:
+        case 8:
+          return { kind: "end" };
+        default:
+          return { kind: "escape" };
+      }
+    }
+    default:
+      return { kind: "escape" };
+  }
+}
+
+/** Arrow (A/B/C/D) or home (H)/end (F) from a final byte, or null. */
+function arrowOrHomeEnd(finalByte: number): Key | null {
+  switch (finalByte) {
+    case 0x41:
+      return { kind: "arrow", dir: "up" };
+    case 0x42:
+      return { kind: "arrow", dir: "down" };
+    case 0x43:
+      return { kind: "arrow", dir: "right" };
+    case 0x44:
+      return { kind: "arrow", dir: "left" };
+    case 0x48:
+      return { kind: "home" };
+    case 0x46:
+      return { kind: "end" };
+    default:
+      return null;
+  }
+}
+
+/** Decode xterm modifier params (`CSI 1 ; <mod> <final>`) into Mods. The
+ * modifier code is 2=shift, 3=alt, 4=shift+alt, 5=ctrl, … — i.e. (code-1) is a
+ * bitfield with bit0=shift, bit1=alt, bit2=ctrl. Returns undefined when no
+ * modifier is held. */
+function modsFromParams(params: number[]): Mods | undefined {
+  let code = 0;
+  if (params.length >= 2) code = params[1] ?? 0;
+  else if (params.length === 1 && params[0] !== 1) code = params[0];
+  if (code <= 1) return undefined;
+  const v = code - 1;
+  const mods: Mods = {
+    shift: (v & 1) === 1,
+    alt: (v & 2) === 2,
+    ctrl: (v & 4) === 4,
+  };
+  return mods.shift || mods.alt || mods.ctrl ? mods : undefined;
+}
+
+/** The scroll direction a key implies, or `null` if it isn't a scroll key.
+ *
+ * `PageUp`/`PageDn` always scroll. `Shift`/`Alt`/`Ctrl` + Up/Down also scroll
+ * — macOS keyboards have no dedicated PgUp/PgDn keys, so a modifier + arrow is
+ * the reachable way to page through history. Plain arrows are left for the
+ * editor (cursor movement in a future multi-line editor). */
+export function scrollDir(key: Key): "up" | "down" | null {
+  if (key.kind === "page") return key.dir;
+  if (key.kind === "arrow" && (key.dir === "up" || key.dir === "down")) {
+    const m = key.mods;
+    if (m && (m.shift || m.alt || m.ctrl)) return key.dir;
+  }
   return null;
 }

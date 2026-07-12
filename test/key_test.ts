@@ -93,3 +93,154 @@ Deno.test("parseKey: incomplete multi-byte UTF-8 returns null", () => {
 Deno.test("parseKey: empty buffer returns null", () => {
   assertEquals(parseKey(new Uint8Array([])), null);
 });
+
+// ── CSI modifier sequences (Shift/Alt/Ctrl + arrow/home/delete/page) ───────
+// macOS keyboards have no dedicated PgUp/PgDn keys, so modifier+arrow must
+// parse correctly so the TUI can map them to scrolling.
+
+Deno.test("parseKey: Shift+Up carries a shift mod (CSI 1;2A)", () => {
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x41])),
+    {
+      key: {
+        kind: "arrow",
+        dir: "up",
+        mods: { shift: true, alt: false, ctrl: false },
+      },
+      consumed: 6,
+    },
+  );
+});
+
+Deno.test("parseKey: Alt+Down carries an alt mod (CSI 1;3B)", () => {
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x33, 0x42])),
+    {
+      key: {
+        kind: "arrow",
+        dir: "down",
+        mods: { shift: false, alt: true, ctrl: false },
+      },
+      consumed: 6,
+    },
+  );
+});
+
+Deno.test("parseKey: Ctrl+Up carries a ctrl mod (CSI 1;5A)", () => {
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x41])),
+    {
+      key: {
+        kind: "arrow",
+        dir: "up",
+        mods: { shift: false, alt: false, ctrl: true },
+      },
+      consumed: 6,
+    },
+  );
+});
+
+Deno.test("parseKey: Shift+Alt+Right combines mods (CSI 1;4C)", () => {
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x34, 0x43])),
+    {
+      key: {
+        kind: "arrow",
+        dir: "right",
+        mods: { shift: true, alt: true, ctrl: false },
+      },
+      consumed: 6,
+    },
+  );
+});
+
+Deno.test("parseKey: a plain arrow has no mods field", () => {
+  // Unmodified arrows keep the original shape (no `mods`) so existing
+  // behavior — and the editor's cursor movement — is unchanged.
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x5b, 0x41])),
+    { key: { kind: "arrow", dir: "up" }, consumed: 3 },
+  );
+});
+
+Deno.test("parseKey: Ctrl+Delete is parsed, not swallowed (CSI 3;5~)", () => {
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x5b, 0x33, 0x3b, 0x35, 0x7e])),
+    { key: { kind: "delete" }, consumed: 6 },
+  );
+});
+
+Deno.test("parseKey: Ctrl+PgUp still reads as page up (CSI 5;5~)", () => {
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x5b, 0x35, 0x3b, 0x35, 0x7e])),
+    { key: { kind: "page", dir: "up" }, consumed: 6 },
+  );
+});
+
+Deno.test("parseKey: SS3 arrows (ESC O A) parse in application-cursor mode", () => {
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x4f, 0x41])),
+    { key: { kind: "arrow", dir: "up" }, consumed: 3 },
+  );
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x4f, 0x48])),
+    { key: { kind: "home" }, consumed: 3 },
+  );
+});
+
+Deno.test("parseKey: incomplete modifier CSI returns null until the final byte arrives", () => {
+  assertEquals(parseKey(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x32])), null);
+});
+
+// ── scrollDir: which keys scroll the output region ─────────────────────────
+
+import { scrollDir } from "../src/tui/key.ts";
+import type { Key } from "../src/tui/key.ts";
+
+Deno.test("scrollDir: PageUp/PageDn always scroll", () => {
+  assertEquals(scrollDir({ kind: "page", dir: "up" as const }), "up");
+  assertEquals(scrollDir({ kind: "page", dir: "down" as const }), "down");
+});
+
+Deno.test("scrollDir: Shift/Alt/Ctrl + Up/Down scrolls", () => {
+  const shiftUp: Key = {
+    kind: "arrow",
+    dir: "up",
+    mods: { shift: true, alt: false, ctrl: false },
+  };
+  const altDown: Key = {
+    kind: "arrow",
+    dir: "down",
+    mods: { shift: false, alt: true, ctrl: false },
+  };
+  const ctrlUp: Key = {
+    kind: "arrow",
+    dir: "up",
+    mods: { shift: false, alt: false, ctrl: true },
+  };
+  assertEquals(scrollDir(shiftUp), "up");
+  assertEquals(scrollDir(altDown), "down");
+  assertEquals(scrollDir(ctrlUp), "up");
+});
+
+Deno.test("scrollDir: plain arrows do NOT scroll (reserved for the editor)", () => {
+  assertEquals(scrollDir({ kind: "arrow", dir: "up" as const }), null);
+  assertEquals(scrollDir({ kind: "arrow", dir: "down" as const }), null);
+  assertEquals(scrollDir({ kind: "arrow", dir: "left" as const }), null);
+});
+
+Deno.test("scrollDir: modifier on left/right is not a scroll key", () => {
+  const shiftLeft: Key = {
+    kind: "arrow",
+    dir: "left",
+    mods: { shift: true, alt: false, ctrl: false },
+  };
+  assertEquals(scrollDir(shiftLeft), null);
+});
+
+Deno.test("scrollDir: non-arrow keys never scroll", () => {
+  assertEquals(scrollDir({ kind: "char", char: "a" }), null);
+  assertEquals(scrollDir({ kind: "enter" }), null);
+  assertEquals(scrollDir({ kind: "escape" }), null);
+  assertEquals(scrollDir({ kind: "ctrl", char: "c" }), null);
+});

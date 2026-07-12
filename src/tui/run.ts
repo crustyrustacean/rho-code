@@ -50,7 +50,7 @@ import {
 } from "../state.ts";
 import type { Key } from "./key.ts";
 import { InputEditor, inputView } from "./input.ts";
-import { parseKey } from "./key.ts";
+import { parseKey, scrollDir } from "./key.ts";
 import { Scrollback } from "./scrollback.ts";
 import { Screen } from "./screen.ts";
 import { blockLines } from "./block.ts";
@@ -188,12 +188,15 @@ class Tui {
       this.render();
       return;
     }
-    // Scrolling (PageUp/PageDn).
-    if (key.kind === "page") {
+    // Scrolling: PageUp/PageDn, plus Shift/Alt/Ctrl + Up/Down (macOS has no
+    // dedicated PgUp/PgDn keys, so a modifier + arrow pages through history).
+    const sdir = scrollDir(key);
+    if (sdir) {
       const { rows } = this.screen.size();
-      this.scrollback.viewportHeight = Math.max(1, rows - 3);
-      if (key.dir === "up") this.scrollback.scrollUp(rows - 3);
-      else this.scrollback.scrollDown(rows - 3);
+      const page = Math.max(1, rows - 3);
+      this.scrollback.viewportHeight = page;
+      if (sdir === "up") this.scrollback.scrollUp(page);
+      else this.scrollback.scrollDown(page);
       this.render();
       return;
     }
@@ -436,7 +439,7 @@ class Tui {
   pushStartupBanner(): void {
     this.push(`${bold}rho-code${reset}`);
     this.push(
-      `${dim}type to chat · while rho works, input steers · /help · Ctrl-C quit · PgUp/PgDn scroll${reset}`,
+      `${dim}type to chat · while rho works, input steers · /help · Ctrl-C quit · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
     );
     this.push("");
   }
