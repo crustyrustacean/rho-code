@@ -13,12 +13,10 @@ const CLEAR_LINE = "\x1b[K";
 
 /** One screen frame for [`Screen.render`]. */
 export interface Frame {
-  /** Sticky top line: usage instructions. */
-  header: string;
   /** Output lines, already sized to the output region's height. */
   lines: string[];
-  /** Footer stats line (model · busy · iters · tools · time · ctx · cost). */
-  footerStats: string;
+  /** Footer rows (cwd/stats), each pre-sized to the terminal width. */
+  footerLines: string[];
   /** Visible input text (already windowed to the box width). */
   input: string;
   /** Cursor column within `input` (0 = before the first char). */
@@ -75,16 +73,16 @@ export class Screen {
     }
   }
 
-  /** Paint a frame. Layout: header (1) · output (rows-3) · footer stats (1) ·
-   * input (1). */
+  /** Paint a frame. Layout: output region · footer (N rows) · input (1 row).
+   * Output and footer lines are pre-sized by the caller (ANSI-aware), so they
+   * are emitted verbatim; only the plain input text is clipped. */
   render(frame: Frame): void {
     const { rows, cols } = this.size();
-    if (rows < 4) return; // too small to render the three zones
-    const outputHeight = rows - 3;
+    const footerH = frame.footerLines.length;
+    if (rows < footerH + 2) return; // too small to render output + footer + input
+    const outputHeight = rows - footerH - 1;
 
     let buf = HOME;
-    // Header (row 1).
-    buf += clip(frame.header, cols) + reset + CLEAR_LINE + "\n";
     // Output region.
     for (let r = 0; r < outputHeight; r++) {
       const line = frame.lines[r] ?? "";
@@ -92,9 +90,11 @@ export class Screen {
       // so don't clip here — a raw slice would split ANSI escape sequences.
       buf += line + reset + CLEAR_LINE + "\n";
     }
-    // Footer stats (row rows-1).
-    buf += clip(frame.footerStats, cols) + reset + CLEAR_LINE + "\n";
-    // Input (row rows).
+    // Footer rows (cwd line + stats line), pre-sized — emit verbatim.
+    for (const fl of frame.footerLines) {
+      buf += fl + reset + CLEAR_LINE + "\n";
+    }
+    // Input (last row).
     buf += clip(frame.input, cols) + reset + CLEAR_LINE;
     // Park the cursor in the input box at the editor's column (1-based).
     buf += `\x1b[${rows};${frame.inputCol + 1}H`;

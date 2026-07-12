@@ -74,13 +74,23 @@ export function buildFooter(s: FooterState): string[] {
 /** Assemble the stats line: left token/cost/context parts, right-aligned model. */
 function buildStatsLine(s: FooterState): string {
   const parts: string[] = [];
-  if (s.inputTokens) parts.push(`${dim}↑${formatTokens(s.inputTokens)}${reset}`);
-  if (s.outputTokens) parts.push(`${dim}↓${formatTokens(s.outputTokens)}${reset}`);
-  if (s.cachedTokens) parts.push(`${dim}R${formatTokens(s.cachedTokens)}${reset}`);
+  if (s.inputTokens) {
+    parts.push(`${dim}↑${formatTokens(s.inputTokens)}${reset}`);
+  }
+  if (s.outputTokens) {
+    parts.push(`${dim}↓${formatTokens(s.outputTokens)}${reset}`);
+  }
+  if (s.cachedTokens) {
+    parts.push(`${dim}R${formatTokens(s.cachedTokens)}${reset}`);
+  }
   if (s.cost && s.cost > 0) parts.push(`${dim}$${s.cost.toFixed(3)}${reset}`);
 
-  const left = parts.length > 0 ? parts.join(" ") + " " + contextPart(s) : contextPart(s);
-  const rightCore = s.showProvider && s.provider ? `(${s.provider}) ${s.model}` : s.model;
+  const left = parts.length > 0
+    ? parts.join(" ") + " " + contextPart(s)
+    : contextPart(s);
+  const rightCore = s.showProvider && s.provider
+    ? `(${s.provider}) ${s.model}`
+    : s.model;
   const right = `${dim}${rightCore}${reset}`;
 
   const leftW = visibleWidth(left);
@@ -95,7 +105,9 @@ function buildStatsLine(s: FooterState): string {
   const availForRight = s.width - leftW - minGap;
   if (availForRight > 0) {
     const truncRight = truncateToWidth(right, availForRight, "");
-    const pad = " ".repeat(Math.max(0, s.width - leftW - visibleWidth(truncRight)));
+    const pad = " ".repeat(
+      Math.max(0, s.width - leftW - visibleWidth(truncRight)),
+    );
     return left + pad + truncRight;
   }
   // No room for the model at all: drop it, truncate the stats.

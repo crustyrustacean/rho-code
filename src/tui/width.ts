@@ -89,7 +89,9 @@ export function truncateToWidth(
   }
   if (!truncated) return str; // fit without truncation — return verbatim
   // Close any active style after the cut; leave plain text untouched.
-  if (ellipsis) return style ? `${out}${ellipsis}${reset}` : `${out}${ellipsis}`;
+  if (ellipsis) {
+    return style ? `${out}${ellipsis}${reset}` : `${out}${ellipsis}`;
+  }
   return style ? `${out}${reset}` : out;
 }
 

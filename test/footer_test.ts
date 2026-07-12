@@ -52,14 +52,22 @@ Deno.test("footer pwd line: substitutes home with ~, appends branch and session"
 });
 
 Deno.test("footer pwd line: no home substitution when cwd is outside $HOME", () => {
-  const [pwd] = buildFooter({ ...base, cwd: "/opt/project", home: "/home/jeff" });
+  const [pwd] = buildFooter({
+    ...base,
+    cwd: "/opt/project",
+    home: "/home/jeff",
+  });
   assertEquals(plain(pwd), "/opt/project (main)");
   const [pwd2] = buildFooter({ ...base, cwd: "/etc", home: undefined });
   assertEquals(plain(pwd2), "/etc (main)");
 });
 
 Deno.test("footer pwd line: omits branch and session when absent", () => {
-  const [pwd] = buildFooter({ ...base, gitBranch: undefined, sessionName: undefined });
+  const [pwd] = buildFooter({
+    ...base,
+    gitBranch: undefined,
+    sessionName: undefined,
+  });
   assertEquals(plain(pwd), "~/dev/app");
 });
 
@@ -101,7 +109,11 @@ Deno.test("footer stats line: model is dropped when the terminal is too narrow",
 });
 
 Deno.test("footer stats line: provider prefix shown when requested and room allows", () => {
-  const [, stats] = buildFooter({ ...base, showProvider: true, provider: "anthropic" });
+  const [, stats] = buildFooter({
+    ...base,
+    showProvider: true,
+    provider: "anthropic",
+  });
   assertEquals(plain(stats).endsWith("(anthropic) claude-sonnet"), true);
 });
 

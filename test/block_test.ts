@@ -3,7 +3,7 @@
 // `bgCode` background, with `padX` columns of inner padding. ANSI resets
 // inside the content must not punch a hole in the background.
 
-import { blockLines, blockBlank } from "../src/tui/block.ts";
+import { blockBlank, blockLines } from "../src/tui/block.ts";
 import { bgUser, bold, reset } from "../src/ansi.ts";
 import { visibleWidth } from "../src/tui/width.ts";
 import { assertEquals } from "@std/assert";

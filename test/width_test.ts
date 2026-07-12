@@ -3,8 +3,8 @@
 // input.ts; double-width/CJK is a known v1 limitation). ANSI escape sequences
 // are zero-width.
 
-import { visibleWidth, truncateToWidth, padRight } from "../src/tui/width.ts";
-import { bold, reset, red } from "../src/ansi.ts";
+import { padRight, truncateToWidth, visibleWidth } from "../src/tui/width.ts";
+import { bold, red, reset } from "../src/ansi.ts";
 import { assertEquals } from "@std/assert";
 
 Deno.test("visibleWidth: plain text counts one column per code point", () => {

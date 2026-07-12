@@ -9,9 +9,9 @@
     "@std/assert": "jsr:@std/assert@^1.0.19"
   },
   "tasks": {
-    "dev": "deno run --allow-net --allow-run --allow-read main.ts",
-    "watch": "deno run --watch --allow-net --allow-run --allow-read main.ts",
-    "build": "deno compile --allow-run --allow-read main.ts -o rho-code",
+    "dev": "deno run --allow-net --allow-run --allow-read --allow-env main.ts",
+    "watch": "deno run --watch --allow-net --allow-run --allow-read --allow-env main.ts",
+    "build": "deno compile --allow-run --allow-read --allow-env main.ts -o rho-code",
     "test": "deno test"
   }
 }
