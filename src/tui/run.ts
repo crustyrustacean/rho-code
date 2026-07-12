@@ -57,7 +57,7 @@ import { Scrollback } from "./scrollback.ts";
 import { Screen } from "./screen.ts";
 import { blockLines } from "./block.ts";
 import { buildFooter } from "./footer.ts";
-import { SessionPicker } from "./picker.ts";
+import { formatModelRow, formatProviderRow, Picker } from "./picker.ts";
 import { reasoningTailLines } from "./reasoning.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "./spinner.ts";
 import { padRight, truncateToWidth } from "./width.ts";
@@ -90,6 +90,20 @@ interface SessionEntry {
   mtimeSecs: number;
   sizeKb: number;
   entryCount: number;
+}
+
+/** A model row, as returned by the `listModels` RPC. */
+interface ModelEntry {
+  id: string;
+  provider: string;
+}
+
+/** A provider row, as returned by the `listProviders` RPC. */
+interface ProviderEntry {
+  name: string;
+  isExternal: boolean;
+  reachable: boolean;
+  active: boolean;
 }
 
 /** Run the TUI until the user exits or rho dies. Requires a real terminal. */
@@ -142,9 +156,14 @@ class Tui {
   reasoningStart = 0; // Date.now() at the first reasoning delta of a segment
   nextToolId = 1; // monotonic block id for each tool call
   lastTool: ToolBlockState | null = null; // most recent tool block (Ctrl-O target)
-  // Session resume picker overlay (null when closed).
-  picker: SessionPicker | null = null;
+  // Picker overlay (session resume / model switch / provider browse).
+  picker: Picker | null = null;
+  pickerKind: "session" | "model" | "provider" | null = null;
+  pickerTitle = "";
+  pickerHint = "";
   pickerSessions: SessionEntry[] = [];
+  pickerModels: ModelEntry[] = [];
+  pickerProviders: ProviderEntry[] = [];
   pasteBuf: string[] = [];
   exited = false;
 
@@ -280,6 +299,11 @@ class Tui {
       this.toggleLastToolExpanded();
       return;
     }
+    // Ctrl-L opens the model picker (pi-style model select).
+    if (key.kind === "ctrl" && key.char === "l") {
+      await this.openModelPicker();
+      return;
+    }
 
     const result = this.editor.handle(key);
     if (result.submitted !== null) {
@@ -332,6 +356,16 @@ class Tui {
       // `/resume` with no args opens the interactive session picker.
       if (cmd === "/resume" && !args) {
         await this.openSessionPicker();
+        return;
+      }
+      // `/model` with no args opens the model picker.
+      if (cmd === "/model" && !args) {
+        await this.openModelPicker();
+        return;
+      }
+      // `/providers` opens the provider picker.
+      if (cmd === "/providers") {
+        await this.openProviderPicker();
         return;
       }
       try {
@@ -396,20 +430,115 @@ class Tui {
       return;
     }
     this.pickerSessions = sessions;
-    this.picker = new SessionPicker(
+    this.openPicker(
+      "session",
       sessions.map((s) => this.formatSessionRow(s)),
+      `${bold}Resume a session${reset} ${gray}(${sessions.length})${reset}`,
+      `${dim}↑↓ navigate · PgUp/PgDn page · enter resume · esc cancel${reset}`,
     );
+  }
+
+  /** Open the model picker, optionally filtered to one provider. */
+  async openModelPicker(filterProvider?: string): Promise<void> {
+    let result: { models: ModelEntry[] };
+    try {
+      result = await requestResponse("listModels") as { models: ModelEntry[] };
+    } catch (e) {
+      const msg = (e as { message?: string })?.message ?? String(e);
+      this.push(`${red}failed to list models${reset}: ${msg}`);
+      return;
+    }
+    let models = (result.models ?? []).slice().sort((a, b) =>
+      a.provider.localeCompare(b.provider) ||
+      a.id.localeCompare(b.id)
+    );
+    if (filterProvider) {
+      models = models.filter((m) => m.provider === filterProvider);
+    }
+    if (models.length === 0) {
+      this.push(
+        `${gray}no models${reset}${
+          filterProvider ? ` ${gray}for ${filterProvider}${reset}` : ""
+        }`,
+      );
+      return;
+    }
+    this.pickerModels = models;
+    const scope = filterProvider ? ` · ${filterProvider}` : "";
+    const picker = this.openPicker(
+      "model",
+      models.map((m) => formatModelRow(m, currentModel)),
+      `${bold}Choose a model${reset} ${gray}(${models.length}${scope})${reset}`,
+      `${dim}↑↓ navigate · enter switch · esc cancel${reset}`,
+    );
+    const cur = models.findIndex((m) => m.id === currentModel);
+    if (cur >= 0) picker.select(cur);
     this.render();
   }
 
-  /** Route a keystroke to the open picker; select resumes, escape closes. */
+  /** Open the provider picker; selecting one opens its filtered model picker. */
+  async openProviderPicker(): Promise<void> {
+    let result: { providers: ProviderEntry[] };
+    try {
+      result = await requestResponse("listProviders") as {
+        providers: ProviderEntry[];
+      };
+    } catch (e) {
+      const msg = (e as { message?: string })?.message ?? String(e);
+      this.push(`${red}failed to list providers${reset}: ${msg}`);
+      return;
+    }
+    const providers = (result.providers ?? []).slice().sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+    if (providers.length === 0) {
+      this.push(`${gray}no providers configured${reset}`);
+      return;
+    }
+    this.pickerProviders = providers;
+    this.openPicker(
+      "provider",
+      providers.map((p) => formatProviderRow(p)),
+      `${bold}Choose a provider${reset} ${gray}(${providers.length})${reset}`,
+      `${dim}↑↓ navigate · enter browse models · esc cancel${reset}`,
+    );
+  }
+
+  /** Create + install a picker overlay of `kind` and render it. */
+  openPicker(
+    kind: "session" | "model" | "provider",
+    items: string[],
+    title: string,
+    hint: string,
+  ): Picker {
+    this.pickerKind = kind;
+    this.pickerTitle = title;
+    this.pickerHint = hint;
+    this.picker = new Picker(items);
+    this.render();
+    return this.picker;
+  }
+
+  /** Route a keystroke to the open picker. */
   async onPickerKey(key: Key): Promise<void> {
     const picker = this.picker!;
     const action = picker.handle(key);
     if (action === "select") {
-      const entry = this.pickerSessions[picker.selected];
-      this.closePicker();
-      if (entry) await this.resumeSession(entry.path);
+      const idx = picker.selected;
+      const kind = this.pickerKind;
+      if (kind === "session") {
+        const entry = this.pickerSessions[idx];
+        this.closePicker();
+        if (entry) await this.resumeSession(entry.path);
+      } else if (kind === "model") {
+        const m = this.pickerModels[idx];
+        this.closePicker();
+        if (m) await this.switchModel(m.id);
+      } else if (kind === "provider") {
+        const p = this.pickerProviders[idx];
+        if (p) await this.openModelPicker(p.name); // swap to filtered model picker
+        else this.closePicker();
+      }
       return;
     }
     if (action === "cancel") {
@@ -422,7 +551,27 @@ class Tui {
   /** Close the picker and repaint the chat underneath. */
   closePicker(): void {
     this.picker = null;
+    this.pickerKind = null;
     this.render();
+  }
+
+  /** Switch the active model via the `setModel` RPC, updating the footer. */
+  async switchModel(id: string): Promise<void> {
+    try {
+      const result = await requestResponse("setModel", { model: id }) as {
+        model: string;
+        provider: string;
+      };
+      setCurrentModel(result.model);
+      this.push(
+        `${green}switched${reset} to ${cyan}${result.model}${reset} ${gray}(provider: ${
+          result.provider || "default"
+        })${reset}`,
+      );
+    } catch (e) {
+      const msg = (e as { message?: string })?.message ?? String(e);
+      this.push(`${red}not switched${reset}: ${msg}`);
+    }
   }
 
   /** Resume a session by path, updating the footer model/cwd. */
@@ -458,10 +607,9 @@ class Tui {
     this.screen.renderPicker({
       rows,
       cols,
-      title: `${bold}Resume a session${reset} ${gray}(${picker.count})${reset}`,
+      title: this.pickerTitle,
       rows_text,
-      hint:
-        `${dim}↑↓ navigate · PgUp/PgDn page · enter resume · esc cancel${reset}`,
+      hint: this.pickerHint,
     });
   }
 
@@ -652,7 +800,7 @@ class Tui {
   pushStartupBanner(): void {
     this.push(`${bold}rho-code${reset}`);
     this.push(
-      `${dim}type to chat · Ctrl-J newline · Ctrl-O expand tool · /help · /quit or Ctrl-C · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
+      `${dim}type to chat · Ctrl-J newline · Ctrl-L model · Ctrl-O expand tool · /help · /quit or Ctrl-C · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
     );
     this.push("");
   }

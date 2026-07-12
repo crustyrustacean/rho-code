@@ -1,7 +1,7 @@
-// A generic list picker for overlay UIs (e.g. the session resume picker). Pure
-// navigation + windowing logic — no rendering, no I/O — driven by the same
-// `Key` type the terminal loop produces. The render layer reads `visible()`
-// each frame; `handle()` returns the user's decision.
+// A generic list picker for overlay UIs (session resume, model switch, provider
+// browse). Pure navigation + windowing logic — no rendering, no I/O — driven by
+// the same `Key` type the terminal loop produces. The render layer reads
+// `visible()` each frame; `handle()` returns the user's decision.
 
 import type { Key } from "./key.ts";
 
@@ -13,7 +13,7 @@ export type PickerAction = "select" | "cancel" | null;
  * the caller maps the selected index back to the underlying data. The viewport
  * height is set by the render loop so windowing fits the screen.
  */
-export class SessionPicker {
+export class Picker {
   readonly items: string[];
   #selected = 0;
   #top = 0; // index of the first visible row
@@ -27,6 +27,11 @@ export class SessionPicker {
   /** The currently selected row index (0-based). */
   get selected(): number {
     return this.#selected;
+  }
+
+  /** Move the selection to `index` (clamped). Used to open on a highlighted row. */
+  select(index: number): void {
+    this.#setSelected(index);
   }
 
   /** Number of items in the list. */
@@ -97,4 +102,24 @@ export class SessionPicker {
     const maxTop = Math.max(0, this.items.length - h);
     this.#top = Math.max(0, Math.min(this.#top, maxTop));
   }
+}
+
+// ── Row formatters (plain text — the render layer applies dim/selected styling) ─
+
+/** A model row: `●` marks the active model. */
+export function formatModelRow(
+  m: { id: string; provider: string },
+  currentModel: string,
+): string {
+  return `${m.id === currentModel ? "\u25CF" : " "} ${m.id} (${m.provider})`;
+}
+
+/** A provider row: `●` marks the active provider, plus reachability/type. */
+export function formatProviderRow(
+  p: { name: string; isExternal: boolean; reachable: boolean; active: boolean },
+): string {
+  const mark = p.active ? "\u25CF" : " ";
+  const reach = p.reachable ? "reachable" : "unreachable";
+  const kind = p.isExternal ? "external" : "local";
+  return `${mark} ${p.name}  ${reach} \u00B7 ${kind}`;
 }
