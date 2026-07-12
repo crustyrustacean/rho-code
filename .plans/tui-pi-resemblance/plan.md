@@ -29,28 +29,23 @@ using TDD on top of the existing pure-module test suite. See kb doc
 
 # Phases
 
-- **P1 — width utils + bg colors.** New `src/tui/width.ts`: `visibleWidth`,
-  `truncateToWidth`, `padRight`. Add background SGR codes (`bgUser`,
-  `bgToolPending`, `bgToolSuccess`, `bgToolError`, `bgCode`) to `src/ansi.ts`.
-  Tests: `test/width_test.ts`.
-- **P2 — block renderer.** New `src/tui/block.ts`:
-  `blockLines(content, cols, bgCode, padX)` → full-width bg-padded styled lines.
+- **P1 — width utils + bg colors.** ✅ New `src/tui/width.ts`: `visibleWidth`,
+  `truncateToWidth`, `padRight`. Background SGR codes in `src/ansi.ts`. Tests:
+  `test/width_test.ts`.
+- **P2 — block renderer.** ✅ New `src/tui/block.ts`: `blockLines`/`blockBlank`.
   Tests: `test/block_test.ts`.
-- **P3 — scrollback multi-line replace.** Add
-  `Scrollback.replaceLastN(n, lines)` and expose a line-count getter for the
-  last block. Tests appended to `test/scrollback_test.ts`.
-- **P4 — footer builder.** New `src/tui/footer.ts`: pure `buildFooter(state)` →
-  `[pwdLine, statsLine]` with token formatting, dim styling, right-aligned
-  model, context-% color thresholds. Tests: `test/footer_test.ts`.
-- **P5 — wire into the TUI.** `run.ts`: echo user prompts as blocks; render tool
-  call/result/denied as blocks capturing `output`; accumulate
-  input/output/cached tokens from `usage`; fetch cwd+git branch; call
-  `buildFooter`. `screen.ts`: drop sticky header (move hints into a startup
-  banner in the scrollback), render 2-row footer, layout = output(rows-3) +
-  footer(2) + input(1). Add `formatTokens` shared helper.
-- **P6 — verify + commit.** `deno task test` all green; `deno lint`; `deno fmt`;
-  manual `deno task dev` smoke if a TTY is available. Commit per phase, final
-  commit on the branch.
+- **P3 — scrollback multi-line replace.** ✅ `Scrollback.replaceLastN`. Tests in
+  `test/scrollback_test.ts`.
+- **P4 — footer builder.** ✅ New `src/tui/footer.ts`: `buildFooter` +
+  `formatTokens`. Tests: `test/footer_test.ts`.
+- **P5 — wire into the TUI.** ✅ User-prompt echo blocks; tool
+  call/result/denied blocks (capturing `output`); cumulative token/cost from
+  `usage`; cwd + git branch; `buildFooter`; dropped sticky header for a
+  scrollback banner; Screen 2-footer layout. New `test/tool_block_test.ts`.
+  `--allow-env` added to tasks.
+- **P6 — verify + commit.** ✅ 99 tests green; `deno lint`/`deno fmt --check`
+  clean; `deno check main.ts` clean; live pty smoke (rho 0.86.0) renders banner
+  - footer + model, clean exit.
 
 # Out of scope for this pass (future work)
 
