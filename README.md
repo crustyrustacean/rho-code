@@ -8,6 +8,9 @@ JSON-RPC mode and provides a terminal-based chat interface.
 
 - Terminal UI modeled on the
   [pi coding agent](https://github.com/earendil-works/pi-mono) chat interface:
+  - **Bordered multi-line editor** — press `Ctrl-J` (or paste) for a new line;
+    `Enter` submits. Up/Down navigate lines; Home/End and Ctrl-A/E/Ctrl-K are
+    line-local. The box grows up to five rows.
   - **Highlighted user-message blocks** — your prompts are echoed as full-width
     tinted blocks.
   - **Tool-call blocks** — each tool call renders in a state-colored block (gray
@@ -17,6 +20,8 @@ JSON-RPC mode and provides a terminal-based chat interface.
     throughput (`↑in ↓out R:cached`), cost, and context usage on the bottom,
     with the model right-aligned. Context % turns yellow past 70% and red past
     90%.
+  - **Scroll anywhere** — `PgUp`/`PgDn`, or `Shift`/`Alt`/`Ctrl` + ↑/↓ on
+    keyboards without dedicated page keys (e.g. macOS).
 - Streams agent responses, reasoning, and tool activity in real time
 - Markdown rendering for assistant messages (headings, bold/italic, code)
 - Type while rho works to steer the active turn

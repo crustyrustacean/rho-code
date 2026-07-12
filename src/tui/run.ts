@@ -455,7 +455,7 @@ class Tui {
   pushStartupBanner(): void {
     this.push(`${bold}rho-code${reset}`);
     this.push(
-      `${dim}type to chat · while rho works, input steers · /help · Ctrl-C quit · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
+      `${dim}type to chat · Ctrl-J newline · while rho works, input steers · /help · Ctrl-C quit · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
     );
     this.push("");
   }
