@@ -1,6 +1,8 @@
 # rho-code
 
-Interactive REPL frontend for the [rho coding agent](https://github.com/jeff-mitchell/rho). Spawns rho in headless JSON-RPC mode and provides a terminal-based chat interface.
+Interactive REPL frontend for the
+[rho coding agent](https://github.com/jeff-mitchell/rho). Spawns rho in headless
+JSON-RPC mode and provides a terminal-based chat interface.
 
 ## Features
 

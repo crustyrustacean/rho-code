@@ -5,7 +5,9 @@ export function formatToolArgs(args: string): string {
     const parsed = JSON.parse(args);
     if (parsed.path && Object.keys(parsed).length === 1) return parsed.path;
     if (parsed.path && Array.isArray(parsed.edits)) {
-      return `${parsed.path} (${parsed.edits.length} edit${parsed.edits.length !== 1 ? "s" : ""})`;
+      return `${parsed.path} (${parsed.edits.length} edit${
+        parsed.edits.length !== 1 ? "s" : ""
+      })`;
     }
     if (parsed.command) {
       const cmd = parsed.command.length > 60

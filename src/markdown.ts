@@ -7,7 +7,15 @@
 // point it at an array. Kept free of `process.stdout` so it composes with the
 // TUI's line-based output region.
 
-import { reset, bold, cyan, italic, underline, codeBg, codeFg } from "./ansi.ts";
+import {
+  bold,
+  codeBg,
+  codeFg,
+  cyan,
+  italic,
+  reset,
+  underline,
+} from "./ansi.ts";
 
 let lineBuffer = "";
 let inCodeBlock = false;
@@ -58,7 +66,10 @@ function flushFormattedLine(line: string): void {
   }
 
   let formatted = line;
-  formatted = formatted.replace(RE_INLINE_CODE, (_m, p1) => codeBg + codeFg + p1 + reset);
+  formatted = formatted.replace(
+    RE_INLINE_CODE,
+    (_m, p1) => codeBg + codeFg + p1 + reset,
+  );
   formatted = formatted.replace(RE_BOLD, (_m, p1) => bold + p1 + reset);
   formatted = formatted.replace(RE_ITALIC, (_m, p1) => italic + p1 + reset);
   emit(formatted);

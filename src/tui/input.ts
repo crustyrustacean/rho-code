@@ -130,7 +130,11 @@ export interface InputView {
  * Each code point counts as one column (double-width/CJK handling is a known
  * v1 limitation). When the text fits, the whole string is shown.
  */
-export function inputView(text: string, cursor: number, width: number): InputView {
+export function inputView(
+  text: string,
+  cursor: number,
+  width: number,
+): InputView {
   const chars = [...text];
   if (width <= 0) return { view: "", col: 0 };
   if (chars.length <= width) return { view: text, col: cursor };

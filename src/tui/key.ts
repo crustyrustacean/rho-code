@@ -47,12 +47,18 @@ export function parseKey(buf: Uint8Array<ArrayBufferLike>): ParsedKey | null {
       if (buf.length < 3) return null; // incomplete
       const final = buf[2]!;
       switch (final) {
-        case 0x41: return { key: { kind: "arrow", dir: "up" }, consumed: 3 };
-        case 0x42: return { key: { kind: "arrow", dir: "down" }, consumed: 3 };
-        case 0x43: return { key: { kind: "arrow", dir: "right" }, consumed: 3 };
-        case 0x44: return { key: { kind: "arrow", dir: "left" }, consumed: 3 };
-        case 0x48: return { key: { kind: "home" }, consumed: 3 };
-        case 0x46: return { key: { kind: "end" }, consumed: 3 };
+        case 0x41:
+          return { key: { kind: "arrow", dir: "up" }, consumed: 3 };
+        case 0x42:
+          return { key: { kind: "arrow", dir: "down" }, consumed: 3 };
+        case 0x43:
+          return { key: { kind: "arrow", dir: "right" }, consumed: 3 };
+        case 0x44:
+          return { key: { kind: "arrow", dir: "left" }, consumed: 3 };
+        case 0x48:
+          return { key: { kind: "home" }, consumed: 3 };
+        case 0x46:
+          return { key: { kind: "end" }, consumed: 3 };
         case 0x33:
         case 0x35:
         case 0x36:
@@ -90,14 +96,20 @@ export function parseKey(buf: Uint8Array<ArrayBufferLike>): ParsedKey | null {
   }
   if (b0 < 0x20) {
     // Other control char → Ctrl + letter (0x01 → 'a', 0x03 → 'c', …).
-    return { key: { kind: "ctrl", char: String.fromCodePoint(b0 + 0x60) }, consumed: 1 };
+    return {
+      key: { kind: "ctrl", char: String.fromCodePoint(b0 + 0x60) },
+      consumed: 1,
+    };
   }
 
   // ── Printable / multi-byte UTF-8 ──────────────────────────────────────
   const len = utf8Len(b0);
   if (len === null) {
     // Unexpected continuation/invalid lead byte: consume one and emit nothing useful.
-    return { key: { kind: "char", char: String.fromCodePoint(b0) }, consumed: 1 };
+    return {
+      key: { kind: "char", char: String.fromCodePoint(b0) },
+      consumed: 1,
+    };
   }
   if (buf.length < len) return null; // incomplete multi-byte sequence
   const char = new TextDecoder().decode(buf.subarray(0, len));

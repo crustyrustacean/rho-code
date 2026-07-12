@@ -19,7 +19,10 @@ Deno.test("parseKey: multi-byte UTF-8 decodes as one char", () => {
   // é = U+00E9 = 0xC3 0xA9
   expectKey([0xc3, 0xa9], { key: { kind: "char", char: "é" }, consumed: 2 });
   // ✨ = U+2728 = 0xE2 0x9C 0xA8
-  expectKey([0xe2, 0x9c, 0xa8], { key: { kind: "char", char: "✨" }, consumed: 3 });
+  expectKey([0xe2, 0x9c, 0xa8], {
+    key: { kind: "char", char: "✨" },
+    consumed: 3,
+  });
 });
 
 Deno.test("parseKey: Enter is CR or LF", () => {
@@ -44,10 +47,22 @@ Deno.test("parseKey: control chars map to ctrl+letter", () => {
 });
 
 Deno.test("parseKey: arrow keys (CSI A/B/C/D)", () => {
-  expectKey([0x1b, 0x5b, 0x41], { key: { kind: "arrow", dir: "up" }, consumed: 3 });
-  expectKey([0x1b, 0x5b, 0x42], { key: { kind: "arrow", dir: "down" }, consumed: 3 });
-  expectKey([0x1b, 0x5b, 0x43], { key: { kind: "arrow", dir: "right" }, consumed: 3 });
-  expectKey([0x1b, 0x5b, 0x44], { key: { kind: "arrow", dir: "left" }, consumed: 3 });
+  expectKey([0x1b, 0x5b, 0x41], {
+    key: { kind: "arrow", dir: "up" },
+    consumed: 3,
+  });
+  expectKey([0x1b, 0x5b, 0x42], {
+    key: { kind: "arrow", dir: "down" },
+    consumed: 3,
+  });
+  expectKey([0x1b, 0x5b, 0x43], {
+    key: { kind: "arrow", dir: "right" },
+    consumed: 3,
+  });
+  expectKey([0x1b, 0x5b, 0x44], {
+    key: { kind: "arrow", dir: "left" },
+    consumed: 3,
+  });
 });
 
 Deno.test("parseKey: Home/End (CSI H/F)", () => {
@@ -57,8 +72,14 @@ Deno.test("parseKey: Home/End (CSI H/F)", () => {
 
 Deno.test("parseKey: Delete / PgUp / PgDn (CSI X~)", () => {
   expectKey([0x1b, 0x5b, 0x33, 0x7e], { key: { kind: "delete" }, consumed: 4 });
-  expectKey([0x1b, 0x5b, 0x35, 0x7e], { key: { kind: "page", dir: "up" }, consumed: 4 });
-  expectKey([0x1b, 0x5b, 0x36, 0x7e], { key: { kind: "page", dir: "down" }, consumed: 4 });
+  expectKey([0x1b, 0x5b, 0x35, 0x7e], {
+    key: { kind: "page", dir: "up" },
+    consumed: 4,
+  });
+  expectKey([0x1b, 0x5b, 0x36, 0x7e], {
+    key: { kind: "page", dir: "down" },
+    consumed: 4,
+  });
 });
 
 Deno.test("parseKey: incomplete escape sequence returns null (needs more bytes)", () => {

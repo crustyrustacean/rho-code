@@ -7,7 +7,9 @@
  * (redirect message) to deny with alternative instructions. When the user
  * denies without providing a message, the callback is called with `null`.
  */
-export let resolveApproval: ((decision: boolean | string | null) => void) | null = null;
+export let resolveApproval:
+  | ((decision: boolean | string | null) => void)
+  | null = null;
 export function setResolveApproval(
   fn: ((decision: boolean | string | null) => void) | null,
 ) {
