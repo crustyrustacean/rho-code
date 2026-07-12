@@ -20,6 +20,9 @@ export class Scrollback {
   #lines: string[] = [];
   #offset = 0; // lines above the bottom the view is parked at (0 = bottom)
   readonly #maxLines: number;
+  /** Tracked blocks keyed by id, mapping to their [start, start+len) slice of
+   * `#lines` so they can be replaced in place (tool-block expand/collapse). */
+  #blocks = new Map<number, { start: number; len: number }>();
   /** Height of the output region, set by the render loop so scroll clamps fit. */
   viewportHeight = 0;
 
@@ -39,11 +42,54 @@ export class Scrollback {
   push(line: string): void {
     const wasAtBottom = this.atBottom;
     this.#lines.push(line);
-    if (this.#lines.length > this.#maxLines) {
-      const excess = this.#lines.length - this.#maxLines;
-      this.#lines.splice(0, excess);
-    }
+    this.#trim();
     if (!wasAtBottom) this.#offset += 1;
+  }
+
+  /** Append a tracked block under `id` (its lines can later be replaced in
+   * place via replaceBlock, even after other content is pushed). */
+  pushBlock(id: number, lines: string[]): void {
+    const wasAtBottom = this.atBottom;
+    const start = this.#lines.length;
+    for (const line of lines) this.#lines.push(line);
+    this.#blocks.set(id, { start, len: lines.length });
+    this.#trim();
+    if (!wasAtBottom) this.#offset += lines.length;
+  }
+
+  /** Replace block `id`'s lines in place (for expand/collapse). Returns false
+   * if the id is unknown (never pushed, or trimmed away). */
+  replaceBlock(id: number, lines: string[]): boolean {
+    const block = this.#blocks.get(id);
+    if (!block) return false;
+    const delta = lines.length - block.len;
+    this.#lines.splice(block.start, block.len, ...lines);
+    block.len = lines.length;
+    if (delta !== 0) {
+      // Shift any blocks that start after this one.
+      for (const other of this.#blocks.values()) {
+        if (other !== block && other.start > block.start) other.start += delta;
+      }
+      if (!this.atBottom) {
+        this.#offset = Math.max(
+          0,
+          Math.min(this.#offset + delta, this.#maxOffset),
+        );
+      }
+    }
+    return true;
+  }
+
+  /** Trim the oldest lines past the cap, dropping block tracking for any block
+   * whose start lands in the trimmed region (it can no longer be replaced). */
+  #trim(): void {
+    if (this.#lines.length <= this.#maxLines) return;
+    const excess = this.#lines.length - this.#maxLines;
+    this.#lines.splice(0, excess);
+    for (const [id, b] of this.#blocks) {
+      if (b.start >= excess) b.start -= excess;
+      else this.#blocks.delete(id);
+    }
   }
 
   /** Whether the view is pinned to the bottom (showing the newest output). */
@@ -90,10 +136,7 @@ export class Scrollback {
     }
     for (const line of lines) {
       this.#lines.push(line);
-      if (this.#lines.length > this.#maxLines) {
-        const excess = this.#lines.length - this.#maxLines;
-        this.#lines.splice(0, excess);
-      }
+      this.#trim();
       if (!wasAtBottom) this.#offset += 1;
     }
     if (!wasAtBottom) {

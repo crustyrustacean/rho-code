@@ -66,6 +66,22 @@ const MAX_INPUT_ROWS = 5;
 /** Maximum wrapped rows of reasoning shown live while the model thinks. */
 const REASONING_TAIL_ROWS = 6;
 
+/** Tool-result output rows shown collapsed (default) vs expanded (Ctrl-O). */
+const COLLAPSED_OUTPUT_LINES = 8;
+const EXPANDED_OUTPUT_LINES = 200;
+
+/** Mutable state of one tool block — tracked in the scrollback by `id` so it
+ * can be repainted (result/denied) and expanded/collapsed (Ctrl-O) in place. */
+interface ToolBlockState {
+  id: number;
+  name: string;
+  args: string;
+  status: "pending" | "done" | "blocked";
+  error: boolean;
+  fullOutput: string;
+  expanded: boolean;
+}
+
 /** Run the TUI until the user exits or rho dies. Requires a real terminal. */
 export async function runTui(): Promise<void> {
   if (!Deno.stdin.isTerminal()) {
@@ -114,9 +130,8 @@ class Tui {
   reasoningActive = false;
   reasoningBlockLines = 0; // rows in the live thinking block, for replaceLastN
   reasoningStart = 0; // Date.now() at the first reasoning delta of a segment
-  toolBlockLines = 0; // lines in the live tool block, for replaceLastN repaints
-  lastToolName = "";
-  lastToolArgs = "";
+  nextToolId = 1; // monotonic block id for each tool call
+  lastTool: ToolBlockState | null = null; // most recent tool block (Ctrl-O target)
   pasteBuf: string[] = [];
   exited = false;
 
@@ -236,6 +251,11 @@ class Tui {
       if (sdir === "up") this.scrollback.scrollUp(page);
       else this.scrollback.scrollDown(page);
       this.render();
+      return;
+    }
+    // Ctrl-O expands/collapses the most recent tool block's output.
+    if (key.kind === "ctrl" && key.char === "o") {
+      this.toggleLastToolExpanded();
       return;
     }
 
@@ -422,54 +442,50 @@ class Tui {
       case "tool/call": {
         this.finishReasoning();
         flushMarkdownBuffer();
-        const name = params.name as string;
-        const args = formatToolArgs(params.arguments as string);
-        this.lastToolName = name;
-        this.lastToolArgs = args;
+        const tool: ToolBlockState = {
+          id: this.nextToolId++,
+          name: params.name as string,
+          args: formatToolArgs(params.arguments as string),
+          status: "pending",
+          error: false,
+          fullOutput: "",
+          expanded: false,
+        };
+        this.lastTool = tool;
         const cols = this.screen.size().cols;
-        const lines = this.renderToolBlock(
-          bgToolPending,
-          name,
-          args,
-          { status: `${yellow}●${reset} ${dim}running${reset}` },
-          cols,
+        this.scrollback.pushBlock(
+          tool.id,
+          this.buildToolBlockLines(tool, cols),
         );
-        for (const line of lines) this.push(line);
-        this.toolBlockLines = lines.length;
         break;
       }
 
       case "tool/result": {
         const isError = params.is_error as boolean;
-        const output = this.formatToolOutput(params.output as string ?? "");
-        const bg = isError ? bgToolError : bgToolSuccess;
-        const status = isError
-          ? `${red}✗ failed${reset}`
-          : `${green}✓ done${reset}`;
-        const cols = this.screen.size().cols;
-        const lines = this.renderToolBlock(
-          bg,
-          this.lastToolName,
-          this.lastToolArgs,
-          { status, output },
-          cols,
-        );
-        this.scrollback.replaceLastN(this.toolBlockLines, lines);
-        this.toolBlockLines = lines.length;
+        if (this.lastTool) {
+          this.lastTool.status = "done";
+          this.lastTool.error = isError;
+          this.lastTool.fullOutput = params.output as string ?? "";
+          this.lastTool.expanded = false;
+          const cols = this.screen.size().cols;
+          this.scrollback.replaceBlock(
+            this.lastTool.id,
+            this.buildToolBlockLines(this.lastTool, cols),
+          );
+        }
         break;
       }
 
       case "tool/denied": {
-        const cols = this.screen.size().cols;
-        const lines = this.renderToolBlock(
-          bgToolError,
-          this.lastToolName,
-          this.lastToolArgs,
-          { status: `${yellow}⊘ blocked${reset}` },
-          cols,
-        );
-        this.scrollback.replaceLastN(this.toolBlockLines, lines);
-        this.toolBlockLines = lines.length;
+        if (this.lastTool) {
+          this.lastTool.status = "blocked";
+          this.lastTool.expanded = false;
+          const cols = this.screen.size().cols;
+          this.scrollback.replaceBlock(
+            this.lastTool.id,
+            this.buildToolBlockLines(this.lastTool, cols),
+          );
+        }
         break;
       }
 
@@ -510,7 +526,7 @@ class Tui {
   pushStartupBanner(): void {
     this.push(`${bold}rho-code${reset}`);
     this.push(
-      `${dim}type to chat · Ctrl-J newline · while rho works, input steers · /help · /quit or Ctrl-C · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
+      `${dim}type to chat · Ctrl-J newline · Ctrl-O expand tool · /help · /quit or Ctrl-C · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
     );
     this.push("");
   }
@@ -636,20 +652,47 @@ class Tui {
     }
   }
 
-  /** Render a tool block (a leading blank line + a bg-painted block). Pure
-   * layout given the current `cols`; the caller pushes or replaceLastN-refs it. */
-  renderToolBlock(
-    bg: string,
-    name: string,
-    args: string,
-    opts: { status?: string; output?: string },
-    cols: number,
-  ): string[] {
-    const head = `${bold}${name}${reset}` +
-      (args ? ` ${gray}${args}${reset}` : "") +
-      (opts.status ? `  ${opts.status}` : "");
-    const content = opts.output ? `${head}\n${opts.output}` : head;
+  /** Build the lines for a tool block (a leading blank + a bg-painted block)
+   * from its current state. Output is trimmed to COLLAPSED/EXPANDED rows. */
+  buildToolBlockLines(tool: ToolBlockState, cols: number): string[] {
+    const bg = tool.error
+      ? bgToolError
+      : tool.status === "pending"
+      ? bgToolPending
+      : tool.status === "blocked"
+      ? bgToolError
+      : bgToolSuccess;
+    const status = tool.status === "pending"
+      ? `${yellow}●${reset} ${dim}running${reset}`
+      : tool.status === "blocked"
+      ? `${yellow}⊘ blocked${reset}`
+      : tool.error
+      ? `${red}✗ failed${reset}`
+      : `${green}✓ done${reset}`;
+    const maxLines = tool.expanded
+      ? EXPANDED_OUTPUT_LINES
+      : COLLAPSED_OUTPUT_LINES;
+    const output = tool.fullOutput
+      ? this.formatToolOutput(tool.fullOutput, maxLines)
+      : "";
+    const head = `${bold}${tool.name}${reset}` +
+      (tool.args ? ` ${gray}${tool.args}${reset}` : "") +
+      `  ${status}`;
+    const content = output ? `${head}\n${output}` : head;
     return ["", ...blockLines(content, cols, bg, 1)];
+  }
+
+  /** Ctrl-O: toggle the most recent tool block between collapsed/expanded. */
+  toggleLastToolExpanded(): void {
+    if (!this.lastTool) return;
+    this.lastTool.expanded = !this.lastTool.expanded;
+    const cols = this.screen.size().cols;
+    this.scrollback.replaceBlock(
+      this.lastTool.id,
+      this.buildToolBlockLines(this.lastTool, cols),
+    );
+    if (this.scrollback.atBottom) this.scrollback.scrollToBottom();
+    this.render();
   }
 
   /** Trim and style a tool-result `output` string for the block body. */

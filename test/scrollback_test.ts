@@ -142,3 +142,67 @@ Deno.test("Scrollback: replaceLastN keeps a scrolled-up view over the same conte
   assertEquals(sb.visible(2, 80), ["line 2", "line 3"]);
   assertEquals(sb.atBottom, false);
 });
+
+// ── tracked blocks: in-place expand/collapse by id (Ctrl-O support) ─────────
+
+Deno.test("Scrollback: pushBlock appends a tracked block; visible shows it", () => {
+  const sb = new Scrollback();
+  sb.push("before");
+  sb.pushBlock(1, ["b1", "b2"]);
+  assertEquals(sb.visible(10, 80), ["before", "b1", "b2"]);
+  assertEquals(sb.atBottom, true);
+});
+
+Deno.test("Scrollback: replaceBlock swaps a block's lines in place by id, even when buried", () => {
+  const sb = new Scrollback();
+  sb.push("x");
+  sb.pushBlock(1, ["old1", "old2"]);
+  sb.push("after"); // block 1 is no longer the tail
+  assertEquals(sb.replaceBlock(1, ["NEW"]), true);
+  assertEquals(sb.visible(10, 80), ["x", "NEW", "after"]);
+});
+
+Deno.test("Scrollback: replaceBlock on an unknown id is a no-op (returns false)", () => {
+  const sb = new Scrollback();
+  sb.pushBlock(1, ["a"]);
+  assertEquals(sb.replaceBlock(99, ["b"]), false);
+  assertEquals(sb.visible(10, 80), ["a"]);
+});
+
+Deno.test("Scrollback: replaceBlock grows/shrinks the block (expand then collapse)", () => {
+  const sb = new Scrollback();
+  sb.push("head");
+  sb.pushBlock(1, ["c1"]); // collapsed
+  sb.push("tail");
+  sb.replaceBlock(1, ["e1", "e2", "e3"]); // expand
+  assertEquals(sb.visible(10, 80), ["head", "e1", "e2", "e3", "tail"]);
+  sb.replaceBlock(1, ["c1"]); // collapse back
+  assertEquals(sb.visible(10, 80), ["head", "c1", "tail"]);
+});
+
+Deno.test("Scrollback: replacing an earlier block doesn't disturb a later block", () => {
+  const sb = new Scrollback();
+  sb.pushBlock(1, ["a1", "a2"]);
+  sb.pushBlock(2, ["b1"]);
+  sb.replaceBlock(1, ["A1", "A2", "A3", "A4"]); // grow block 1
+  assertEquals(sb.visible(10, 80), ["A1", "A2", "A3", "A4", "b1"]);
+  sb.replaceBlock(2, ["B1", "B2"]); // grow block 2 too
+  assertEquals(sb.visible(10, 80), ["A1", "A2", "A3", "A4", "B1", "B2"]);
+});
+
+Deno.test("Scrollback: trimming old lines drops a block's tracking", () => {
+  const sb = new Scrollback({ maxLines: 3 });
+  sb.pushBlock(1, ["b1", "b2"]); // [b1,b2]
+  sb.push("c"); // [b1,b2,c] — full
+  sb.push("d"); // trim b1 → [b2,c,d]; block 1 partially trimmed → untracked
+  assertEquals(sb.replaceBlock(1, ["x"]), false);
+  assertEquals(sb.visible(5, 80), ["b2", "c", "d"]);
+});
+
+Deno.test("Scrollback: replaceBlock keeps a bottomed view pinned to the bottom", () => {
+  const sb = new Scrollback();
+  sb.pushBlock(1, ["a", "b", "c"]);
+  sb.replaceBlock(1, ["a", "b", "c", "d", "e"]); // expand at bottom
+  assertEquals(sb.atBottom, true);
+  assertEquals(sb.visible(10, 80), ["a", "b", "c", "d", "e"]);
+});
