@@ -57,12 +57,16 @@ export async function runTui(): Promise<void> {
   console.error = (...args: unknown[]) =>
     tui.scrollback.push(red + args.join(" ") + reset);
 
+  // Re-render every 500ms while a turn runs so the footer's elapsed time ticks.
+  const tick = setInterval(() => {
+    if (turnInProgress) tui.render();
+  }, 500);
   try {
     tui.screen.enter();
-    tui.pushBanner();
     tui.render();
     await Promise.all([tui.outputLoop(), tui.inputLoop()]);
   } finally {
+    clearInterval(tick);
     tui.exit();
     console.log = origLog;
     console.error = origErr;
@@ -83,45 +87,64 @@ class Tui {
   pasteBuf: string[] = [];
   exited = false;
 
+  // Per-turn metrics shown live in the footer. Reset on agent/start.
+  turnIters = 0;
+  turnTools = 0;
+  turnCost = 0;
+  turnStart = 0; // Date.now() at agent/start; 0 when no turn is active
+  turnDuration: number | null = null; // authoritative ms from agent/end
+
   push(line: string): void {
     this.scrollback.push(line);
-  }
-
-  /** The fixed banner shown on startup. */
-  pushBanner(): void {
-    this.push(`${bold}rho-code${reset} ${gray}— TUI frontend for rho-coding-agent${reset}`);
-    this.push(
-      `${gray}Type a message to start a turn. While rho works, your input ${reset}${cyan}steers${reset}${gray} it. /help for commands, Ctrl-C to quit.${reset}`,
-    );
-    this.push("");
   }
 
   // ── Rendering ─────────────────────────────────────────────────────────
 
   render(): void {
     const { rows, cols } = this.screen.size();
-    const outputHeight = Math.max(1, rows - 2);
+    const outputHeight = Math.max(1, rows - 3);
     this.scrollback.viewportHeight = outputHeight;
     const { view, col } = inputView(this.editor.text, this.editor.cursor, cols);
     this.screen.render({
+      header: this.header(),
       lines: this.scrollback.visible(outputHeight, cols),
-      statusBar: this.statusBar(),
+      footerStats: this.footerStats(),
       input: view,
       inputCol: col,
     });
   }
 
-  /** Status bar: model · busy/ready · context%, or the paste-mode hint. */
-  statusBar(): string {
+  /** Sticky header line: how to use rho-code. */
+  header(): string {
+    return `${bold}rho-code${reset} ${gray}— type to chat; while rho works, input steers · /help · Ctrl-C quit · PgUp/PgDn scroll${reset}`;
+  }
+
+  /** Footer: model · busy/ready · iters · tools · time · ctx% · cost. */
+  footerStats(): string {
     if (inPasteMode) {
       return `${dim}paste mode — type lines, a lone . to send, Esc to cancel${reset}`;
     }
-    const busy = turnInProgress;
-    const state = busy
-      ? `${yellow}working…${reset} ${dim}(type to steer)${reset}`
-      : `${green}ready${reset}`;
-    const ctx = this.contextPct ? `${gray}· ${this.contextPct}% ctx${reset}` : "";
-    return `${cyan}${currentModel}${reset} ${gray}·${reset} ${state} ${ctx}`;
+    const sep = ` ${gray}·${reset} `;
+    const parts: string[] = [];
+    parts.push(`${cyan}${currentModel}${reset}`);
+    parts.push(turnInProgress ? `${yellow}working${reset}` : `${green}ready${reset}`);
+    if (this.turnIters > 0) parts.push(`${this.turnIters}i`);
+    if (this.turnTools > 0) parts.push(`${this.turnTools}t`);
+    parts.push(this.elapsedLabel());
+    if (this.contextPct) parts.push(`${this.contextPct}%`);
+    parts.push(this.costLabel());
+    return parts.join(sep);
+  }
+
+  /** Elapsed time for the current/last turn (live while a turn runs). */
+  elapsedLabel(): string {
+    const ms = this.turnDuration ?? (this.turnStart ? Date.now() - this.turnStart : 0);
+    return ms > 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+  }
+
+  /** Per-turn cost, or an em dash before any pricing arrives. */
+  costLabel(): string {
+    return this.turnCost > 0 ? `$${this.turnCost.toFixed(4)}` : `${gray}—${reset}`;
   }
 
   // ── Input loop ────────────────────────────────────────────────────────
@@ -266,6 +289,7 @@ class Tui {
         break;
 
       case "agent/start":
+        this.startTurn();
         setTurnInProgress(true);
         break;
 
@@ -302,6 +326,7 @@ class Tui {
       case "tool/call": {
         this.finishReasoning();
         flushMarkdownBuffer();
+        this.turnTools += 1;
         const name = params.name as string;
         const args = formatToolArgs(params.arguments as string);
         this.lastToolLine =
@@ -334,20 +359,15 @@ class Tui {
     }
   }
 
-  /** On `ready`: fetch model/provider, show the header line, resolve readiness. */
+  /** On `ready`: fetch the active model for the footer, resolve readiness. */
   onReady(): void {
     requestResponse("getState").then((state) => {
-      const s = state as { model: string; provider: string; cwd: string };
+      const s = state as { model: string };
       setCurrentModel(s.model);
-      this.scrollback.replaceLast(
-        `${cyan}${s.model}${reset} ${gray}(${s.provider || "default provider"}) · ${s.cwd}${reset}`,
-      );
-      this.push("");
       readyResolve();
       this.render();
-    }).catch((e) => {
-      this.push(`${red}[error]${reset} failed to fetch state: ${JSON.stringify(e)}`);
-      readyResolve();
+    }).catch(() => {
+      readyResolve(); // model stays blank; not fatal
     });
   }
 
@@ -383,59 +403,43 @@ class Tui {
     });
   }
 
-  /** On `usage`: update the context % for the status bar. */
+  /** On `usage`: track iteration count + per-iteration cost + context %. */
   onUsage(params: Record<string, unknown>): void {
+    const iter = params.iteration as number | undefined;
+    if (typeof iter === "number") this.turnIters = Math.max(this.turnIters, iter);
+    const u = params.usage as { cost?: number } | undefined;
+    if (u && typeof u.cost === "number" && u.cost > 0) this.turnCost += u.cost;
     const c = params.context as { utilizationPercent?: number } | undefined;
     if (c && typeof c.utilizationPercent === "number") {
       this.contextPct = String(c.utilizationPercent);
     }
   }
 
-  /** On `agent/end`: fetch stats, then print the full run summary (context +
-   * cost included) and refresh the status bar's context %. */
+  /** On `agent/start`: reset the per-turn footer metrics. */
+  startTurn(): void {
+    this.turnIters = 0;
+    this.turnTools = 0;
+    this.turnCost = 0;
+    this.turnStart = Date.now();
+    this.turnDuration = null;
+  }
+
+  /** On `agent/end`: finalize the footer's per-turn metrics + context %. */
   async onAgentEnd(params: Record<string, unknown>): Promise<void> {
     flushMarkdownBuffer();
-    const dur = params.durationMs as number;
-    const iters = params.iterations as number;
+    this.turnIters = (params.iterations as number) ?? this.turnIters;
     const toolCalls = params.toolCalls as Array<{ name: string }> | undefined;
-    const finishReason = params.finishReason as string | undefined;
-
-    const parts: string[] = [];
-    parts.push(`${cyan}${currentModel}${reset}`);
-    if (iters > 1) parts.push(`${iters} iterations`);
-    if (toolCalls && toolCalls.length > 0) {
-      parts.push(`${toolCalls.length} tool call${toolCalls.length !== 1 ? "s" : ""}`);
-    }
-    parts.push(dur > 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`);
-    if (finishReason && finishReason !== "stop") {
-      parts.push(`${yellow}${finishReason.replace(/_/g, " ")}${reset}`);
-    }
-
+    if (toolCalls) this.turnTools = toolCalls.length;
+    this.turnDuration = (params.durationMs as number) ?? null;
+    this.turnStart = 0; // freeze the live elapsed display
     try {
-      const stats = await requestResponse("getSessionStats") as {
-        contextWindow: number;
-        completionReserve: number;
-        estimatedUsed: number;
-        utilizationPercent: number;
-        apiUsage: { totalCost: number; requestCount: number };
-      };
-      // Usable budget excludes the completion reserve, matching utilizationPercent.
-      const budget = stats.contextWindow - stats.completionReserve;
-      parts.push(
-        `${Math.round(stats.estimatedUsed / 1000)}k/${Math.round(budget / 1000)}k ctx (${stats.utilizationPercent}%)`,
-      );
-      // Always surface cost; "cost n/a" when requests ran but no pricing applied.
-      if (stats.apiUsage && stats.apiUsage.totalCost > 0) {
-        parts.push(`$${stats.apiUsage.totalCost.toFixed(4)}`);
-      } else if (stats.apiUsage && stats.apiUsage.requestCount > 0) {
-        parts.push(`${gray}cost n/a${reset}`);
+      const stats = await requestResponse("getSessionStats") as { utilizationPercent: number };
+      if (typeof stats.utilizationPercent === "number") {
+        this.contextPct = String(stats.utilizationPercent);
       }
-      this.contextPct = String(stats.utilizationPercent);
     } catch {
-      // Stats are best-effort; the summary still prints without them.
+      // Stats are best-effort; the footer keeps its running values.
     }
-
-    this.push(`${gray}─── ${parts.join(" · ")} ───${reset}`);
     this.render();
   }
 

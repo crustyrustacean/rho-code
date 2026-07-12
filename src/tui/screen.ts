@@ -13,10 +13,12 @@ const CLEAR_LINE = "\x1b[K";
 
 /** One screen frame for [`Screen.render`]. */
 export interface Frame {
+  /** Sticky top line: usage instructions. */
+  header: string;
   /** Output lines, already sized to the output region's height. */
   lines: string[];
-  /** Single status-bar line (model / busy / context). */
-  statusBar: string;
+  /** Footer stats line (model · busy · iters · tools · time · ctx · cost). */
+  footerStats: string;
   /** Visible input text (already windowed to the box width). */
   input: string;
   /** Cursor column within `input` (0 = before the first char). */
@@ -73,22 +75,27 @@ export class Screen {
     }
   }
 
-  /** Paint a frame. Output region height is `rows - 2` (status bar + input). */
+  /** Paint a frame. Layout: header (1) · output (rows-3) · footer stats (1) ·
+   * input (1). */
   render(frame: Frame): void {
     const { rows, cols } = this.size();
-    if (rows < 3) return; // too small to render anything useful
-    const outputHeight = rows - 2;
-    const inputWidth = cols;
+    if (rows < 4) return; // too small to render the three zones
+    const outputHeight = rows - 3;
 
     let buf = HOME;
+    // Header (row 1).
+    buf += clip(frame.header, cols) + reset + CLEAR_LINE + "\n";
+    // Output region.
     for (let r = 0; r < outputHeight; r++) {
       const line = frame.lines[r] ?? "";
       // Output lines are pre-wrapped to `cols` visible width by the scrollback,
       // so don't clip here — a raw slice would split ANSI escape sequences.
       buf += line + reset + CLEAR_LINE + "\n";
     }
-    buf += clip(frame.statusBar, cols) + reset + CLEAR_LINE + "\n";
-    buf += clip(frame.input, inputWidth) + reset + CLEAR_LINE;
+    // Footer stats (row rows-1).
+    buf += clip(frame.footerStats, cols) + reset + CLEAR_LINE + "\n";
+    // Input (row rows).
+    buf += clip(frame.input, cols) + reset + CLEAR_LINE;
     // Park the cursor in the input box at the editor's column (1-based).
     buf += `\x1b[${rows};${frame.inputCol + 1}H`;
     this.writeRaw(buf);
