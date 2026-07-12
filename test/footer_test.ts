@@ -150,3 +150,17 @@ Deno.test("footer stats line: no spinner when not working", () => {
   const text = plain(stats);
   assertEquals(text.includes("\u280B"), false);
 });
+
+Deno.test("footer stats line: a steer count shows a ↻N indicator", () => {
+  const [, stats] = buildFooter({
+    ...base,
+    working: true,
+    elapsedMs: 3200,
+    spinner: "\u280B",
+    steers: 2,
+  });
+  const text = plain(stats);
+  assertEquals(text.includes("\u280B 3.2s"), true);
+  assertEquals(text.includes("\u21BB2"), true); // ↻2
+  assertEquals(visibleWidth(stats), 80);
+});

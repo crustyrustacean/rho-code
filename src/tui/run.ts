@@ -58,6 +58,7 @@ import { blockLines } from "./block.ts";
 import { buildFooter } from "./footer.ts";
 import { reasoningTailLines } from "./reasoning.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "./spinner.ts";
+import { truncateToWidth } from "./width.ts";
 
 /** Maximum rows the input box may grow to before it scrolls internally. */
 const MAX_INPUT_ROWS = 5;
@@ -131,6 +132,9 @@ class Tui {
   // Date.now() at the start of the current turn; 0 when idle. Drives the
   // footer's elapsed-time + spinner while a turn runs.
   turnStart = 0;
+  // Steers sent during the current turn (reset on agent/end). Shown in the
+  // footer as a live `↻N` indicator while the turn processes them.
+  steerCount = 0;
 
   push(line: string): void {
     this.scrollback.push(line);
@@ -187,6 +191,7 @@ class Tui {
       spinner: turnInProgress && this.turnStart > 0
         ? spinnerFrame(Date.now())
         : undefined,
+      steers: this.steerCount,
       width: cols,
     });
   }
@@ -244,6 +249,12 @@ class Tui {
 
   /** Route a submitted input line to approval / paste / command / prompt. */
   async onSubmit(text: string): Promise<void> {
+    // `/quit` (and aliases) always exit, even mid-approval or in paste mode.
+    if (text === "/quit" || text === "/q" || text === "/exit") {
+      this.exit();
+      return;
+    }
+
     // Approval mode: y/yes → allow, n/no → deny, anything else → redirect.
     if (resolveApproval) {
       const lower = text.toLowerCase();
@@ -269,6 +280,13 @@ class Tui {
       const space = text.indexOf(" ");
       const cmd = space === -1 ? text : text.slice(0, space);
       const args = space === -1 ? "" : text.slice(space + 1).trim();
+      // `/abort` cancels the in-progress turn (handled here, not in the
+      // command registry, so it works without a live rho round-trip wrapper).
+      if (cmd === "/abort") {
+        sendRequest("abort");
+        this.push(`${gray}abort requested${reset}`);
+        return;
+      }
       try {
         const found = await dispatchCommand(cmd, args);
         if (!found) {
@@ -286,14 +304,20 @@ class Tui {
     this.sendPrompt(text);
   }
 
-  /** Send a prompt, echoing it as a highlighted user block, and steering the
-   * active turn if one is in progress. */
+  /** Send a prompt. When idle the message is echoed as a highlighted user
+   * block; when a turn is in progress it's sent as a steering nudge and shown
+   * as a compact `↳ steer (N): …` line, with a live steer count in the footer. */
   sendPrompt(message: string): void {
-    this.echoUser(message);
-    sendRequest("prompt", buildPromptParams(message, turnInProgress));
     if (turnInProgress) {
-      this.push(`${dim}↳ steering the current turn…${reset}`);
+      this.steerCount += 1;
+      const cols = this.screen.size().cols;
+      const firstLine = message.split("\n")[0] ?? "";
+      const preview = truncateToWidth(firstLine, Math.max(10, cols - 18), "…");
+      this.push(`${dim}↳ steer (${this.steerCount}): ${preview}${reset}`);
+    } else {
+      this.echoUser(message);
     }
+    sendRequest("prompt", buildPromptParams(message, turnInProgress));
   }
 
   /** Echo a submitted user message as a full-width highlighted block (pi-style). */
@@ -349,6 +373,7 @@ class Tui {
 
       case "agent/start":
         this.turnStart = Date.now();
+        this.steerCount = 0;
         setTurnInProgress(true);
         break;
 
@@ -485,7 +510,7 @@ class Tui {
   pushStartupBanner(): void {
     this.push(`${bold}rho-code${reset}`);
     this.push(
-      `${dim}type to chat · Ctrl-J newline · while rho works, input steers · /help · Ctrl-C quit · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
+      `${dim}type to chat · Ctrl-J newline · while rho works, input steers · /help · /quit or Ctrl-C · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
     );
     this.push("");
   }
@@ -512,6 +537,7 @@ class Tui {
   async onAgentEnd(_params: Record<string, unknown>): Promise<void> {
     flushMarkdownBuffer();
     this.turnStart = 0; // stop the spinner / elapsed counter
+    this.steerCount = 0; // steers processed — clear the indicator
     try {
       const stats = await requestResponse("getSessionStats") as {
         utilizationPercent?: number;

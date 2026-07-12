@@ -43,6 +43,8 @@ export interface FooterState {
   elapsedMs?: number;
   /** Spinner frame glyph (e.g. from spinnerFrame()) shown when `working`. */
   spinner?: string;
+  /** Steering messages sent during the current turn (0 hides the indicator). */
+  steers?: number;
   /** Terminal columns. */
   width: number;
 }
@@ -83,6 +85,9 @@ function buildStatsLine(s: FooterState): string {
   if (s.working && s.spinner) {
     const secs = ((s.elapsedMs ?? 0) / 1000).toFixed(1);
     parts.push(`${yellow}${s.spinner}${reset} ${dim}${secs}s${reset}`);
+  }
+  if (s.steers && s.steers > 0) {
+    parts.push(`${yellow}↻${s.steers}${reset}`);
   }
   if (s.inputTokens) {
     parts.push(`${dim}↑${formatTokens(s.inputTokens)}${reset}`);
