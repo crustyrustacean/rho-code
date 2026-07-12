@@ -18,6 +18,7 @@ import {
   dim,
   gray,
   green,
+  italic,
   red,
   reset,
   yellow,
@@ -55,10 +56,14 @@ import { Scrollback } from "./scrollback.ts";
 import { Screen } from "./screen.ts";
 import { blockLines } from "./block.ts";
 import { buildFooter } from "./footer.ts";
+import { reasoningTailLines } from "./reasoning.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "./spinner.ts";
 
 /** Maximum rows the input box may grow to before it scrolls internally. */
 const MAX_INPUT_ROWS = 5;
+
+/** Maximum wrapped rows of reasoning shown live while the model thinks. */
+const REASONING_TAIL_ROWS = 6;
 
 /** Run the TUI until the user exits or rho dies. Requires a real terminal. */
 export async function runTui(): Promise<void> {
@@ -106,6 +111,8 @@ class Tui {
   contextWindow = 0;
   reasoningBuf = "";
   reasoningActive = false;
+  reasoningBlockLines = 0; // rows in the live thinking block, for replaceLastN
+  reasoningStart = 0; // Date.now() at the first reasoning delta of a segment
   toolBlockLines = 0; // lines in the live tool block, for replaceLastN repaints
   lastToolName = "";
   lastToolArgs = "";
@@ -365,16 +372,27 @@ class Tui {
         writeMarkdownChunk(params.delta as string);
         break;
 
-      case "reasoning/delta":
+      case "reasoning/delta": {
         flushMarkdownBuffer();
         if (!this.reasoningActive) {
           this.reasoningActive = true;
           this.reasoningBuf = "";
-          this.push(`${gray}┌ thinking${reset}`);
+          this.reasoningStart = Date.now();
         }
         this.reasoningBuf += params.delta as string;
-        this.scrollback.replaceLast(`${dim}${this.reasoningBuf}${reset}`);
+        const cols = this.screen.size().cols;
+        const block = [
+          `${gray}${italic}✦ thinking${reset}`,
+          ...reasoningTailLines(this.reasoningBuf, cols, REASONING_TAIL_ROWS),
+        ];
+        if (this.reasoningBlockLines === 0) {
+          for (const line of block) this.push(line);
+        } else {
+          this.scrollback.replaceLastN(this.reasoningBlockLines, block);
+        }
+        this.reasoningBlockLines = block.length;
         break;
+      }
 
       case "tool/call": {
         this.finishReasoning();
@@ -511,12 +529,21 @@ class Tui {
     this.render();
   }
 
-  /** End a live reasoning line (leaves it in the scrollback as a record). */
+  /** Collapse the live reasoning block into a one-line summary (leaves it in
+   * the scrollback as a record). */
   finishReasoning(): void {
-    if (this.reasoningActive) {
-      this.reasoningActive = false;
-      this.reasoningBuf = "";
-    }
+    if (!this.reasoningActive) return;
+    this.reasoningActive = false;
+    this.reasoningBuf = "";
+    const secs = this.reasoningStart
+      ? ((Date.now() - this.reasoningStart) / 1000).toFixed(1)
+      : "";
+    const summary = secs
+      ? `${gray}✦ thought · ${secs}s${reset}`
+      : `${gray}✦ thought${reset}`;
+    this.scrollback.replaceLastN(this.reasoningBlockLines, [summary]);
+    this.reasoningBlockLines = 0;
+    this.reasoningStart = 0;
   }
 
   /** On `approval/request`: prompt in the scrollback; input is captured on submit. */
