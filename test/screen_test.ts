@@ -104,3 +104,49 @@ Deno.test("composeFrame: returns null when output would have no rows", () => {
 Deno.test("composeFrame: returns null when cols too narrow for a box", () => {
   assertEquals(composeFrame(base(30, 4)), null); // inner width 0
 });
+
+// ── composePickerFrame: the session-picker overlay layout ───────────────────
+
+import { composePickerFrame } from "../src/tui/screen.ts";
+
+Deno.test("composePickerFrame: title, list rows, and hint render in order", () => {
+  const composed = composePickerFrame({
+    rows: 8,
+    cols: 20,
+    title: "TITLE",
+    rows_text: ["row-a", "row-b"],
+    hint: "HINT",
+  })!;
+  const text = plain(composed.text);
+  const tIdx = text.indexOf("TITLE");
+  const rIdx = text.indexOf("row-a");
+  const hIdx = text.indexOf("HINT");
+  assertEquals(tIdx < rIdx && rIdx < hIdx, true);
+});
+
+Deno.test("composePickerFrame: too-short terminal returns null", () => {
+  // rows 4 → list height 0 (need title+blank+1 row+blank+hint = 5).
+  assertEquals(
+    composePickerFrame({
+      rows: 4,
+      cols: 20,
+      title: "t",
+      rows_text: ["a"],
+      hint: "h",
+    }),
+    null,
+  );
+});
+
+Deno.test("composePickerFrame: hides the hardware cursor", () => {
+  const composed = composePickerFrame({
+    rows: 8,
+    cols: 20,
+    title: "t",
+    rows_text: ["a"],
+    hint: "h",
+  })!;
+  const esc = String.fromCharCode(27);
+  assertEquals(composed.text.startsWith(esc + "[?25l"), true);
+  assertEquals(composed.cursorRow, 8); // hint is the last row
+});

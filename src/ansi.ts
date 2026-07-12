@@ -24,3 +24,5 @@ export const bgToolPending = "\x1b[48;5;238m";
 export const bgToolSuccess = "\x1b[48;5;22m";
 /** Failed tool call block (pi `toolErrorBg`). */
 export const bgToolError = "\x1b[48;5;52m";
+/** Highlighted (selected) row in a picker/overlay. */
+export const bgSelected = "\x1b[48;5;239m";

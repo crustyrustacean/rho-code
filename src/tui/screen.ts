@@ -14,6 +14,8 @@ const ENTER_ALT = "\x1b[?1049h";
 const LEAVE_ALT = "\x1b[?1049l";
 const HOME = "\x1b[H";
 const CLEAR_LINE = "\x1b[K";
+const SHOW_CURSOR = "\x1b[?25h";
+const HIDE_CURSOR = "\x1b[?25l";
 
 /** One screen frame for [`Screen.render`] / [`composeFrame`]. */
 export interface Frame {
@@ -31,6 +33,16 @@ export interface Frame {
 export interface FrameInput extends Frame {
   rows: number;
   cols: number;
+}
+
+/** Inputs to [`composePickerFrame`]: a title, the visible rows, and a hint. */
+export interface PickerFrameInput {
+  rows: number;
+  cols: number;
+  title: string;
+  /** Pre-styled, already-windowed list rows. */
+  rows_text: string[];
+  hint: string;
 }
 
 /** A composed frame: the raw ANSI string and where to park the cursor. */
@@ -87,7 +99,28 @@ export function composeFrame(f: FrameInput): ComposedFrame | null {
   const inputTopRow = outputH + footerH + 1; // 1-based row of the top border
   const cursorRow = inputTopRow + 1 + f.inputCursor.row;
   const cursorCol = 3 + f.inputCursor.col; // │(1) + space(1) + col, 1-based
-  return { text: buf, cursorRow, cursorCol };
+  return { text: SHOW_CURSOR + buf, cursorRow, cursorCol };
+}
+
+/** Compose a full-screen picker/overlay frame (title · list · hint). Pure.
+ * Hides the hardware cursor (the picker has no text cursor). Returns null when
+ * the terminal is too short for the title, at least one row, and the hint. */
+export function composePickerFrame(f: PickerFrameInput): ComposedFrame | null {
+  const { rows, cols } = f;
+  // Layout: title (1) · blank (1) · list (L) · blank (1) · hint (1) = L + 4.
+  const listH = rows - 4;
+  if (listH < 1) return null;
+
+  let buf = HOME;
+  buf += f.title + reset + CLEAR_LINE + "\n";
+  buf += CLEAR_LINE + "\n"; // blank
+  for (let i = 0; i < listH; i++) {
+    buf += (f.rows_text[i] ?? "") + reset + CLEAR_LINE + "\n";
+  }
+  buf += CLEAR_LINE + "\n"; // blank
+  buf += f.hint + reset + CLEAR_LINE;
+  // Hint is the last row (listH + 4 = rows); park the (hidden) cursor there.
+  return { text: HIDE_CURSOR + buf, cursorRow: rows, cursorCol: 1 };
 }
 
 /** Manages the terminal for the TUI lifecycle. */
@@ -124,6 +157,7 @@ export class Screen {
       this.#raw = false;
     }
     if (this.#inAlt) {
+      this.writeRaw(SHOW_CURSOR);
       this.writeRaw(LEAVE_ALT);
       this.#inAlt = false;
     }
@@ -134,6 +168,15 @@ export class Screen {
     const { rows, cols } = this.size();
     const composed = composeFrame({ ...frame, rows, cols });
     if (!composed) return; // too small to render
+    this.writeRaw(composed.text);
+    this.writeRaw(`\x1b[${composed.cursorRow};${composed.cursorCol}H`);
+  }
+
+  /** Paint a picker/overlay frame (replaces the chat view while a picker is
+   * open). */
+  renderPicker(frame: PickerFrameInput): void {
+    const composed = composePickerFrame(frame);
+    if (!composed) return;
     this.writeRaw(composed.text);
     this.writeRaw(`\x1b[${composed.cursorRow};${composed.cursorCol}H`);
   }

@@ -9,6 +9,7 @@
 // clobbering the rendered screen.
 
 import {
+  bgSelected,
   bgToolError,
   bgToolPending,
   bgToolSuccess,
@@ -56,9 +57,10 @@ import { Scrollback } from "./scrollback.ts";
 import { Screen } from "./screen.ts";
 import { blockLines } from "./block.ts";
 import { buildFooter } from "./footer.ts";
+import { SessionPicker } from "./picker.ts";
 import { reasoningTailLines } from "./reasoning.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "./spinner.ts";
-import { truncateToWidth } from "./width.ts";
+import { padRight, truncateToWidth } from "./width.ts";
 
 /** Maximum rows the input box may grow to before it scrolls internally. */
 const MAX_INPUT_ROWS = 5;
@@ -80,6 +82,14 @@ interface ToolBlockState {
   error: boolean;
   fullOutput: string;
   expanded: boolean;
+}
+
+/** A previous session row, as returned by the `listSessions` RPC. */
+interface SessionEntry {
+  path: string;
+  mtimeSecs: number;
+  sizeKb: number;
+  entryCount: number;
 }
 
 /** Run the TUI until the user exits or rho dies. Requires a real terminal. */
@@ -132,6 +142,9 @@ class Tui {
   reasoningStart = 0; // Date.now() at the first reasoning delta of a segment
   nextToolId = 1; // monotonic block id for each tool call
   lastTool: ToolBlockState | null = null; // most recent tool block (Ctrl-O target)
+  // Session resume picker overlay (null when closed).
+  picker: SessionPicker | null = null;
+  pickerSessions: SessionEntry[] = [];
   pasteBuf: string[] = [];
   exited = false;
 
@@ -158,6 +171,10 @@ class Tui {
   // ── Rendering ─────────────────────────────────────────────────────────
 
   render(): void {
+    if (this.picker) {
+      this.renderPicker();
+      return;
+    }
     const { rows, cols } = this.screen.size();
     const footerLines = this.footerLines(cols);
     const footerH = footerLines.length;
@@ -234,6 +251,11 @@ class Tui {
       this.exit();
       return;
     }
+    // While the session picker is open, all other keys navigate it.
+    if (this.picker) {
+      await this.onPickerKey(key);
+      return;
+    }
     // Esc cancels paste mode.
     if (key.kind === "escape" && inPasteMode) {
       setInPasteMode(false);
@@ -307,6 +329,11 @@ class Tui {
         this.push(`${gray}abort requested${reset}`);
         return;
       }
+      // `/resume` with no args opens the interactive session picker.
+      if (cmd === "/resume" && !args) {
+        await this.openSessionPicker();
+        return;
+      }
       try {
         const found = await dispatchCommand(cmd, args);
         if (!found) {
@@ -344,6 +371,105 @@ class Tui {
   echoUser(message: string): void {
     const cols = this.screen.size().cols;
     for (const line of blockLines(message, cols, bgUser, 1)) this.push(line);
+  }
+
+  // ── Session resume picker ─────────────────────────────────────────────
+
+  /** Open the interactive session picker (fetches `listSessions`). No-op
+   * message if there are none. */
+  async openSessionPicker(): Promise<void> {
+    let result: { sessions: SessionEntry[] };
+    try {
+      result = await requestResponse("listSessions") as {
+        sessions: SessionEntry[];
+      };
+    } catch (e) {
+      const msg = (e as { message?: string })?.message ?? String(e);
+      this.push(`${red}failed to list sessions${reset}: ${msg}`);
+      return;
+    }
+    const sessions = (result.sessions ?? []).slice().sort((a, b) =>
+      b.mtimeSecs - a.mtimeSecs
+    );
+    if (sessions.length === 0) {
+      this.push(`${gray}no previous sessions${reset}`);
+      return;
+    }
+    this.pickerSessions = sessions;
+    this.picker = new SessionPicker(
+      sessions.map((s) => this.formatSessionRow(s)),
+    );
+    this.render();
+  }
+
+  /** Route a keystroke to the open picker; select resumes, escape closes. */
+  async onPickerKey(key: Key): Promise<void> {
+    const picker = this.picker!;
+    const action = picker.handle(key);
+    if (action === "select") {
+      const entry = this.pickerSessions[picker.selected];
+      this.closePicker();
+      if (entry) await this.resumeSession(entry.path);
+      return;
+    }
+    if (action === "cancel") {
+      this.closePicker();
+      return;
+    }
+    this.render();
+  }
+
+  /** Close the picker and repaint the chat underneath. */
+  closePicker(): void {
+    this.picker = null;
+    this.render();
+  }
+
+  /** Resume a session by path, updating the footer model/cwd. */
+  async resumeSession(path: string): Promise<void> {
+    try {
+      const result = await requestResponse("resumeSession", { path }) as {
+        model: string;
+        cwd?: string;
+        entryCount: number;
+      };
+      setCurrentModel(result.model);
+      if (result.cwd) this.cwd = result.cwd;
+      this.push(
+        `${green}resumed${reset} ${gray}${path} (${result.entryCount} entries, model: ${result.model})${reset}`,
+      );
+    } catch (e) {
+      const msg = (e as { message?: string })?.message ?? String(e);
+      this.push(`${red}failed to resume${reset}: ${msg}`);
+    }
+  }
+
+  /** Render the picker overlay (title · windowed list · hint). */
+  renderPicker(): void {
+    const { rows, cols } = this.screen.size();
+    const picker = this.picker!;
+    picker.viewportHeight = Math.max(1, rows - 4);
+    const rows_text = picker.visible().map((v) => {
+      const text = truncateToWidth(v.text, Math.max(1, cols - 2), "…");
+      return v.selected
+        ? `${bgSelected}${padRight(text, cols)}${reset}`
+        : `${dim}${text}${reset}`;
+    });
+    this.screen.renderPicker({
+      rows,
+      cols,
+      title: `${bold}Resume a session${reset} ${gray}(${picker.count})${reset}`,
+      rows_text,
+      hint:
+        `${dim}↑↓ navigate · PgUp/PgDn page · enter resume · esc cancel${reset}`,
+    });
+  }
+
+  /** One plain picker row: date · entries · size · filename. */
+  formatSessionRow(s: SessionEntry): string {
+    const date = new Date(s.mtimeSecs * 1000).toLocaleString();
+    const name = s.path.split("/").pop() ?? s.path;
+    return `${date}  ${s.entryCount} entries · ${s.sizeKb}KB  ${name}`;
   }
 
   // ── Output loop (rho → screen) ────────────────────────────────────────
