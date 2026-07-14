@@ -8,7 +8,9 @@ import { runTui } from "./src/tui/run.ts";
 handleCliFlags();
 const continueSession = shouldContinueSession();
 
-const { child, childStdin, childStdout } = spawnRho(continueSession);
-initTransport(child, childStdin, childStdout);
+const { child, childStdin, childStdout, childStderr } = spawnRho(
+  continueSession,
+);
+initTransport(child, childStdin, childStdout, childStderr);
 
 await runTui();

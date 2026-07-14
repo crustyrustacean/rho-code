@@ -17,11 +17,16 @@ JSON-RPC mode and provides a terminal-based chat interface.
     while running, green on success, red on error) showing the tool name,
     arguments, and trimmed output. Press `Ctrl-O` to expand/collapse the most
     recent tool's full output in place.
-  - **Two-line footer** — working directory `(git-branch)` on top; token
-    throughput (`↑in ↓out R:cached`), cost, and context usage on the bottom,
-    with the model right-aligned. While a turn runs a spinner + elapsed lead the
-    line and a `↻N` marker counts steers sent. Context % turns yellow past 70%
-    and red past 90%.
+  - **Reasoning blocks** — the model's thinking streams as a compact
+    `✦ thinking` block, then freezes to `✦ thought · Ns` with the tail kept
+    visible (not swallowed). Press `Ctrl-T` to expand the full reasoning in
+    place.
+  - **Two-line footer + Working line** — working directory `(git-branch)` on
+    top; token throughput (`↑in ↓out R:cached`), cost, and context usage on the
+    bottom, with the model right-aligned. While a turn runs, a `Working` line
+    appears above the footer with a spinner, elapsed time, the current activity
+    (thinking / tool name / responding), and a `↻N` steer count. Context % turns
+    yellow past 70% and red past 90%.
   - **Scroll anywhere** — `PgUp`/`PgDn`, or `Shift`/`Alt`/`Ctrl` + ↑/↓ on
     keyboards without dedicated page keys (e.g. macOS).
 - Streams agent responses, reasoning, and tool activity in real time

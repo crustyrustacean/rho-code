@@ -3,7 +3,11 @@
 // rendered lines. Mirrors pi's FooterComponent layout (pwd · branch · session
 // on top; token/cost/context stats left, model right, both dim).
 
-import { buildFooter, formatTokens } from "../src/tui/footer.ts";
+import {
+  buildFooter,
+  buildWorkingLine,
+  formatTokens,
+} from "../src/tui/footer.ts";
 import { dim, red, yellow } from "../src/ansi.ts";
 import { visibleWidth } from "../src/tui/width.ts";
 import { assertEquals } from "@std/assert";
@@ -132,35 +136,20 @@ Deno.test("footer stats line: no token parts when usage is zero/absent", () => {
   assertEquals(text.includes("0%/200k(auto)"), true);
 });
 
-Deno.test("footer stats line: a working spinner + elapsed leads the line", () => {
-  const [, stats] = buildFooter({
-    ...base,
-    working: true,
-    elapsedMs: 3200,
+Deno.test("buildWorkingLine: spinner + Working + elapsed + activity + steers", () => {
+  const line = buildWorkingLine({
     spinner: "\u280B",
-  });
-  const text = plain(stats);
-  assertEquals(text.startsWith("\u280B 3.2s"), true);
-  assertEquals(visibleWidth(stats), 80);
-  assertEquals(text.endsWith("claude-sonnet"), true);
-});
-
-Deno.test("footer stats line: no spinner when not working", () => {
-  const [, stats] = buildFooter({ ...base, working: false });
-  const text = plain(stats);
-  assertEquals(text.includes("\u280B"), false);
-});
-
-Deno.test("footer stats line: a steer count shows a ↻N indicator", () => {
-  const [, stats] = buildFooter({
-    ...base,
-    working: true,
     elapsedMs: 3200,
-    spinner: "\u280B",
+    activity: "thinking",
     steers: 2,
   });
-  const text = plain(stats);
-  assertEquals(text.includes("\u280B 3.2s"), true);
+  const text = plain(line);
+  assertEquals(text.startsWith("\u280B Working 3.2s"), true);
+  assertEquals(text.includes("thinking"), true);
   assertEquals(text.includes("\u21BB2"), true); // ↻2
-  assertEquals(visibleWidth(stats), 80);
+});
+
+Deno.test("buildWorkingLine: omits activity and steers when absent/zero", () => {
+  const line = buildWorkingLine({ spinner: "\u280B", elapsedMs: 500 });
+  assertEquals(plain(line), "\u280B Working 0.5s");
 });

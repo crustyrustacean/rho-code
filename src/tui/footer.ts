@@ -1,11 +1,13 @@
-// Two-line footer builder, mirroring pi's FooterComponent. Pure: given a
-// snapshot of session state and the terminal width, returns the two rendered
+// Footer + working-line builders, mirroring pi's FooterComponent. Pure: given
+// a snapshot of session state and the terminal width, returns the rendered
 // lines (no I/O). Layout:
-//   line 1: `cwd (git-branch) · session-name` — dim, ~-substituted, truncated.
-//   line 2: `↑in ↓out R:cached $cost ctx%/window(auto)` (left, dim) … `model`
-//           (right, dim). The context % is red >90%, yellow >70%, else dim.
+//   footer line 1: `cwd (git-branch) · session-name` — dim, ~-substituted, truncated.
+//   footer line 2: `↑in ↓out R:cached $cost ctx%/window(auto)` (left, dim) … `model`
+//                  (right, dim). The context % is red >90%, yellow >70%, else dim.
+//   working line (transient, above the footer while a turn runs): spinner +
+//     `Working` + elapsed + activity + steer count.
 
-import { dim, red, reset, yellow } from "../ansi.ts";
+import { bold, dim, gray, red, reset, yellow } from "../ansi.ts";
 import { truncateToWidth, visibleWidth } from "./width.ts";
 
 /** Compact token-count formatting, matching pi's footer. */
@@ -37,14 +39,6 @@ export interface FooterState {
   provider?: string;
   /** Prefix the model with `(provider)` when true. */
   showProvider?: boolean;
-  /** True while an agent turn is in progress → show the working spinner. */
-  working?: boolean;
-  /** Elapsed ms for the current turn (shown next to the spinner). */
-  elapsedMs?: number;
-  /** Spinner frame glyph (e.g. from spinnerFrame()) shown when `working`. */
-  spinner?: string;
-  /** Steering messages sent during the current turn (0 hides the indicator). */
-  steers?: number;
   /** Terminal columns. */
   width: number;
 }
@@ -82,13 +76,6 @@ export function buildFooter(s: FooterState): string[] {
 /** Assemble the stats line: left token/cost/context parts, right-aligned model. */
 function buildStatsLine(s: FooterState): string {
   const parts: string[] = [];
-  if (s.working && s.spinner) {
-    const secs = ((s.elapsedMs ?? 0) / 1000).toFixed(1);
-    parts.push(`${yellow}${s.spinner}${reset} ${dim}${secs}s${reset}`);
-  }
-  if (s.steers && s.steers > 0) {
-    parts.push(`${yellow}↻${s.steers}${reset}`);
-  }
   if (s.inputTokens) {
     parts.push(`${dim}↑${formatTokens(s.inputTokens)}${reset}`);
   }
@@ -127,4 +114,32 @@ function buildStatsLine(s: FooterState): string {
   }
   // No room for the model at all: drop it, truncate the stats.
   return truncateToWidth(left, s.width, "...");
+}
+
+// ── Working status line ───────────────────────────────────────────────────
+
+/** Snapshot for the transient "Working" line shown above the footer while an
+ * agent turn runs. */
+export interface WorkingLineState {
+  spinner: string;
+  elapsedMs: number;
+  /** Current activity label, e.g. "thinking" / "read" / "responding". */
+  activity?: string;
+  /** Steering messages sent during the current turn (0 hides the indicator). */
+  steers?: number;
+}
+
+/**
+ * Build the working-status line: spinner + "Working" + elapsed + activity +
+ * steer count. Pure. Left-aligned (not padded) — the renderer clears the rest
+ * of the row.
+ */
+export function buildWorkingLine(s: WorkingLineState): string {
+  const secs = (s.elapsedMs / 1000).toFixed(1);
+  const parts: string[] = [
+    `${yellow}${s.spinner}${reset} ${bold}Working${reset} ${dim}${secs}s${reset}`,
+  ];
+  if (s.activity) parts.push(`${gray}${s.activity}${reset}`);
+  if (s.steers && s.steers > 0) parts.push(`${yellow}↻${s.steers}${reset}`);
+  return parts.join(" ");
 }

@@ -57,6 +57,7 @@ export const commands: Command[] = [
   { name: "/sessions", help: "List previous sessions", run: cmdSessions },
   { name: "/messages", help: "Show conversation messages", run: cmdMessages },
   { name: "/clear", help: "Clear conversation history", run: cmdClear },
+  { name: "/new", help: "Start a fresh session", run: cmdNewSession },
   {
     name: "/resume",
     usage: "/resume <path>",
@@ -212,6 +213,21 @@ export function cmdPaste() {
 export function cmdClear() {
   sendRequest("clear");
   console.log(`${gray}conversation cleared${reset}`);
+}
+
+/** Start a fresh session (new JSONL) via the `newSession` RPC. Keeps the
+ * active model/provider; the old session is flushed and left on disk. */
+export async function cmdNewSession() {
+  try {
+    const result = await requestResponse("newSession") as {
+      sessionId: string;
+      path: string;
+    };
+    console.log(`${green}new session${reset} ${result.path}`);
+  } catch (e) {
+    const message = (e as { message?: string })?.message ?? JSON.stringify(e);
+    console.log(`${red}failed${reset}: ${message}`);
+  }
 }
 
 export async function cmdMessages() {

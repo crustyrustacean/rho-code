@@ -160,4 +160,19 @@ export class Scrollback {
     }
     return rows.slice(-height);
   }
+
+  /** Snapshot of the scrollback's internal state, for the Ctrl-D debug dump. */
+  debugState(): {
+    lineCount: number;
+    offset: number;
+    atBottom: boolean;
+    viewportHeight: number;
+  } {
+    return {
+      lineCount: this.#lines.length,
+      offset: this.#offset,
+      atBottom: this.atBottom,
+      viewportHeight: this.viewportHeight,
+    };
+  }
 }

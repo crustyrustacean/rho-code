@@ -24,6 +24,7 @@ function initTestTransport(sink: string[]) {
     {} as unknown as Deno.ChildProcess,
     recordingStdin(sink),
     new ReadableStream<Uint8Array>(),
+    new ReadableStream<Uint8Array>(),
   );
 }
 

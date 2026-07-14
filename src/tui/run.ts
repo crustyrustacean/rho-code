@@ -28,6 +28,7 @@ import { buildPromptParams } from "../prompt.ts";
 import {
   dispatchResponse,
   getChild,
+  getChildStderr,
   getChildStdout,
   requestResponse,
   sendRequest,
@@ -56,17 +57,21 @@ import { parseKey, scrollDir } from "./key.ts";
 import { Scrollback } from "./scrollback.ts";
 import { Screen } from "./screen.ts";
 import { blockLines } from "./block.ts";
-import { buildFooter } from "./footer.ts";
+import { buildFooter, buildWorkingLine } from "./footer.ts";
 import { formatModelRow, formatProviderRow, Picker } from "./picker.ts";
-import { reasoningTailLines } from "./reasoning.ts";
+import { fullReasoningLines, reasoningTailLines } from "./reasoning.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "./spinner.ts";
-import { padRight, truncateToWidth } from "./width.ts";
+import { padRight, truncateToWidth, visibleWidth } from "./width.ts";
 
 /** Maximum rows the input box may grow to before it scrolls internally. */
 const MAX_INPUT_ROWS = 5;
 
-/** Maximum wrapped rows of reasoning shown live while the model thinks. */
+/** Maximum wrapped rows of reasoning shown live while the model thinks, and in
+ * the compact (collapsed) finished block. */
 const REASONING_TAIL_ROWS = 6;
+
+/** Rows of reasoning shown when a block is expanded via Ctrl-T. */
+const EXPANDED_REASONING_LINES = 200;
 
 /** Tool-result output rows shown collapsed (default) vs expanded (Ctrl-O). */
 const COLLAPSED_OUTPUT_LINES = 8;
@@ -81,6 +86,17 @@ interface ToolBlockState {
   status: "pending" | "done" | "blocked";
   error: boolean;
   fullOutput: string;
+  expanded: boolean;
+}
+
+/** Mutable state of one reasoning ("thinking") block — tracked in the
+ * scrollback by `id` so it can be repainted (streaming → finished) and
+ * expanded/collapsed (Ctrl-T) in place. `buf` holds the full reasoning text. */
+interface ReasoningBlockState {
+  id: number;
+  buf: string;
+  start: number;
+  streaming: boolean;
   expanded: boolean;
 }
 
@@ -132,7 +148,7 @@ export async function runTui(): Promise<void> {
   try {
     tui.screen.enter();
     tui.render();
-    await Promise.all([tui.outputLoop(), tui.inputLoop()]);
+    await Promise.all([tui.outputLoop(), tui.inputLoop(), tui.stderrLoop()]);
   } finally {
     clearInterval(tick);
     tui.exit();
@@ -150,11 +166,12 @@ class Tui {
   // Streaming/rendering scratch state.
   contextPct: number | undefined;
   contextWindow = 0;
-  reasoningBuf = "";
-  reasoningActive = false;
-  reasoningBlockLines = 0; // rows in the live thinking block, for replaceLastN
-  reasoningStart = 0; // Date.now() at the first reasoning delta of a segment
-  nextToolId = 1; // monotonic block id for each tool call
+  // The live or most-recent reasoning ("thinking") block, tracked in the
+  // scrollback by id so it can be repainted (streaming → finished) and
+  // expanded/collapsed (Ctrl-T) in place. `buf` is preserved so the full
+  // reasoning can be shown on expand instead of being swallowed.
+  reasoningBlock: ReasoningBlockState | null = null;
+  nextBlockId = 1; // monotonic id for tracked blocks (tool calls + reasoning)
   lastTool: ToolBlockState | null = null; // most recent tool block (Ctrl-O target)
   // Picker overlay (session resume / model switch / provider browse).
   picker: Picker | null = null;
@@ -180,8 +197,11 @@ class Tui {
   // footer's elapsed-time + spinner while a turn runs.
   turnStart = 0;
   // Steers sent during the current turn (reset on agent/end). Shown in the
-  // footer as a live `↻N` indicator while the turn processes them.
+  // working line as a live `↻N` indicator while the turn processes them.
   steerCount = 0;
+  // Current activity label for the working line ("thinking" / tool name /
+  // "responding"), updated as notifications arrive during a turn.
+  workingActivity = "";
 
   push(line: string): void {
     this.scrollback.push(line);
@@ -196,7 +216,9 @@ class Tui {
     }
     const { rows, cols } = this.screen.size();
     const footerLines = this.footerLines(cols);
+    const workingLine = this.workingLine();
     const footerH = footerLines.length;
+    const extra = workingLine ? 1 : 0;
     const innerWidth = Math.max(1, cols - 4);
     // Cap the input box so it never crowds out the output region (reserve one
     // output row + the two border rows).
@@ -210,17 +232,24 @@ class Tui {
       innerWidth,
       maxInputRows,
     );
-    const outputHeight = Math.max(1, rows - footerH - view.rows.length - 2);
+    const outputHeight = Math.max(
+      1,
+      rows - footerH - extra - view.rows.length - 2,
+    );
     this.scrollback.viewportHeight = outputHeight;
     this.screen.render({
+      rows,
+      cols,
       lines: this.scrollback.visible(outputHeight, cols),
       footerLines,
+      workingLine,
       inputRows: view.rows,
       inputCursor: { row: view.cursorRow, col: view.cursorCol },
     });
   }
 
-  /** Build the footer rows for the current state at `cols` width. */
+  /** Build the footer rows for the current state at `cols` width. The working
+   * indicator lives on its own line (see `workingLine`). */
   footerLines(cols: number): string[] {
     return buildFooter({
       cwd: this.cwd || safeCwd(),
@@ -237,13 +266,19 @@ class Tui {
       model: currentModel || "no-model",
       provider: undefined,
       showProvider: false,
-      working: turnInProgress && this.turnStart > 0,
-      elapsedMs: this.turnStart ? Date.now() - this.turnStart : 0,
-      spinner: turnInProgress && this.turnStart > 0
-        ? spinnerFrame(Date.now())
-        : undefined,
-      steers: this.steerCount,
       width: cols,
+    });
+  }
+
+  /** The transient "Working" line shown above the footer while a turn runs, or
+   * undefined when idle. */
+  workingLine(): string | undefined {
+    if (!turnInProgress || this.turnStart <= 0) return undefined;
+    return buildWorkingLine({
+      spinner: spinnerFrame(Date.now()),
+      elapsedMs: Date.now() - this.turnStart,
+      activity: this.workingActivity,
+      steers: this.steerCount,
     });
   }
 
@@ -297,6 +332,16 @@ class Tui {
     // Ctrl-O expands/collapses the most recent tool block's output.
     if (key.kind === "ctrl" && key.char === "o") {
       this.toggleLastToolExpanded();
+      return;
+    }
+    // Ctrl-T expands/collapses the most recent reasoning (thinking) block.
+    if (key.kind === "ctrl" && key.char === "t") {
+      this.toggleLastReasoningExpanded();
+      return;
+    }
+    // Ctrl-D dumps the renderer state to logs/frame.txt for debugging.
+    if (key.kind === "ctrl" && key.char === "d") {
+      this.dumpDebug();
       return;
     }
     // Ctrl-L opens the model picker (pi-style model select).
@@ -668,17 +713,21 @@ class Tui {
       case "agent/start":
         this.turnStart = Date.now();
         this.steerCount = 0;
+        this.workingActivity = "";
         setTurnInProgress(true);
         break;
 
       case "agent/end":
+        this.finishReasoning();
         setTurnInProgress(false);
         this.onAgentEnd(params);
         break;
 
       case "agent/error":
+        this.finishReasoning();
         setTurnInProgress(false);
         this.turnStart = 0;
+        this.workingActivity = "";
         this.push(`${red}[error]${reset} ${params.error}`);
         break;
 
@@ -688,36 +737,41 @@ class Tui {
 
       case "message/delta":
         this.finishReasoning();
+        this.workingActivity = "responding";
         writeMarkdownChunk(params.delta as string);
         break;
 
       case "reasoning/delta": {
         flushMarkdownBuffer();
-        if (!this.reasoningActive) {
-          this.reasoningActive = true;
-          this.reasoningBuf = "";
-          this.reasoningStart = Date.now();
-        }
-        this.reasoningBuf += params.delta as string;
+        this.workingActivity = "thinking";
         const cols = this.screen.size().cols;
-        const block = [
-          `${gray}${italic}✦ thinking${reset}`,
-          ...reasoningTailLines(this.reasoningBuf, cols, REASONING_TAIL_ROWS),
-        ];
-        if (this.reasoningBlockLines === 0) {
-          for (const line of block) this.push(line);
-        } else {
-          this.scrollback.replaceLastN(this.reasoningBlockLines, block);
+        if (!this.reasoningBlock || !this.reasoningBlock.streaming) {
+          this.reasoningBlock = {
+            id: this.nextBlockId++,
+            buf: "",
+            start: Date.now(),
+            streaming: true,
+            expanded: false,
+          };
+          this.scrollback.pushBlock(
+            this.reasoningBlock.id,
+            this.buildReasoningLines(this.reasoningBlock, cols),
+          );
         }
-        this.reasoningBlockLines = block.length;
+        this.reasoningBlock.buf += params.delta as string;
+        this.scrollback.replaceBlock(
+          this.reasoningBlock.id,
+          this.buildReasoningLines(this.reasoningBlock, cols),
+        );
         break;
       }
 
       case "tool/call": {
         this.finishReasoning();
         flushMarkdownBuffer();
+        this.workingActivity = params.name as string;
         const tool: ToolBlockState = {
-          id: this.nextToolId++,
+          id: this.nextBlockId++,
           name: params.name as string,
           args: formatToolArgs(params.arguments as string),
           status: "pending",
@@ -800,7 +854,7 @@ class Tui {
   pushStartupBanner(): void {
     this.push(`${bold}rho-code${reset}`);
     this.push(
-      `${dim}type to chat · Ctrl-J newline · Ctrl-L model · Ctrl-O expand tool · /help · /quit or Ctrl-C · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
+      `${dim}type to chat · Ctrl-J newline · Ctrl-L model · Ctrl-O expand tool · Ctrl-T expand thinking · /help · /quit or Ctrl-C · scroll: PgUp/PgDn or Shift/Alt+↑↓${reset}`,
     );
     this.push("");
   }
@@ -824,10 +878,26 @@ class Tui {
 
   /** On `agent/end`: flush trailing markdown, freeze the turn clock, and
    * refresh the context snapshot for the footer. */
-  async onAgentEnd(_params: Record<string, unknown>): Promise<void> {
+  async onAgentEnd(params: Record<string, unknown>): Promise<void> {
     flushMarkdownBuffer();
+    // One-line turn summary from the enriched agent/end payload (iterations,
+    // tool count, duration, non-stop finish reasons). Dim so it doesn't
+    // compete with the reply.
+    const parts: string[] = [];
+    const iters = params.iterations as number | undefined;
+    const toolCalls = params.toolCalls as unknown[] | undefined;
+    const durMs = params.durationMs as number | undefined;
+    const finish = params.finishReason as string | undefined;
+    if (typeof iters === "number") parts.push(`${iters} iter`);
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      parts.push(`${toolCalls.length} tool`);
+    }
+    if (typeof durMs === "number") parts.push(`${(durMs / 1000).toFixed(1)}s`);
+    if (typeof finish === "string" && finish !== "stop") parts.push(finish);
+    if (parts.length > 0) this.push(`${dim}  ${parts.join(" · ")}${reset}`);
     this.turnStart = 0; // stop the spinner / elapsed counter
     this.steerCount = 0; // steers processed — clear the indicator
+    this.workingActivity = "";
     try {
       const stats = await requestResponse("getSessionStats") as {
         utilizationPercent?: number;
@@ -845,21 +915,17 @@ class Tui {
     this.render();
   }
 
-  /** Collapse the live reasoning block into a one-line summary (leaves it in
-   * the scrollback as a record). */
+  /** Freeze the live reasoning block: switch its header to the `✦ thought · Ns`
+   * summary but keep the (compact) tail visible — the thinking is not swallowed,
+   * and the full text is preserved for Ctrl-T expand. No-op if not streaming. */
   finishReasoning(): void {
-    if (!this.reasoningActive) return;
-    this.reasoningActive = false;
-    this.reasoningBuf = "";
-    const secs = this.reasoningStart
-      ? ((Date.now() - this.reasoningStart) / 1000).toFixed(1)
-      : "";
-    const summary = secs
-      ? `${gray}✦ thought · ${secs}s${reset}`
-      : `${gray}✦ thought${reset}`;
-    this.scrollback.replaceLastN(this.reasoningBlockLines, [summary]);
-    this.reasoningBlockLines = 0;
-    this.reasoningStart = 0;
+    if (!this.reasoningBlock || !this.reasoningBlock.streaming) return;
+    this.reasoningBlock.streaming = false;
+    const cols = this.screen.size().cols;
+    this.scrollback.replaceBlock(
+      this.reasoningBlock.id,
+      this.buildReasoningLines(this.reasoningBlock, cols),
+    );
   }
 
   /** On `approval/request`: prompt in the scrollback; input is captured on submit. */
@@ -897,18 +963,18 @@ class Tui {
   /** On `usage`: accumulate token/cost deltas + refresh the context snapshot. */
   onUsage(params: Record<string, unknown>): void {
     const u = params.usage as {
-      input_tokens?: number;
-      output_tokens?: number;
-      cached_tokens?: number;
+      inputTokens?: number;
+      outputTokens?: number;
+      cachedTokens?: number;
       cost?: number;
     } | undefined;
     if (u) {
-      if (typeof u.input_tokens === "number") this.cumInput += u.input_tokens;
-      if (typeof u.output_tokens === "number") {
-        this.cumOutput += u.output_tokens;
+      if (typeof u.inputTokens === "number") this.cumInput += u.inputTokens;
+      if (typeof u.outputTokens === "number") {
+        this.cumOutput += u.outputTokens;
       }
-      if (typeof u.cached_tokens === "number") {
-        this.cumCached += u.cached_tokens;
+      if (typeof u.cachedTokens === "number") {
+        this.cumCached += u.cachedTokens;
       }
       if (typeof u.cost === "number") this.sessionCost += u.cost;
     }
@@ -969,6 +1035,37 @@ class Tui {
     this.render();
   }
 
+  /** Ctrl-T: toggle the most recent reasoning block between compact and full. */
+  toggleLastReasoningExpanded(): void {
+    if (!this.reasoningBlock) return;
+    this.reasoningBlock.expanded = !this.reasoningBlock.expanded;
+    const cols = this.screen.size().cols;
+    this.scrollback.replaceBlock(
+      this.reasoningBlock.id,
+      this.buildReasoningLines(this.reasoningBlock, cols),
+    );
+    if (this.scrollback.atBottom) this.scrollback.scrollToBottom();
+    this.render();
+  }
+
+  /** Build the lines for a reasoning block from its current state: a header
+   * (`✦ thinking` while streaming, `✦ thought · Ns` when done) followed by the
+   * compact tail, or the full reasoning when expanded. */
+  buildReasoningLines(block: ReasoningBlockState, cols: number): string[] {
+    const secs = block.start
+      ? ((Date.now() - block.start) / 1000).toFixed(1)
+      : "";
+    const header = block.streaming
+      ? `${gray}${italic}✦ thinking${reset}`
+      : secs
+      ? `${gray}✦ thought · ${secs}s${reset}`
+      : `${gray}✦ thought${reset}`;
+    const body = (!block.streaming && block.expanded)
+      ? fullReasoningLines(block.buf, cols, EXPANDED_REASONING_LINES)
+      : reasoningTailLines(block.buf, cols, REASONING_TAIL_ROWS);
+    return [header, ...body];
+  }
+
   /** Trim and style a tool-result `output` string for the block body. */
   formatToolOutput(output: string, maxLines = 8): string {
     const raw = output.replace(/\s+$/, "");
@@ -983,6 +1080,99 @@ class Tui {
       } more lines)${reset}`;
     }
     return body;
+  }
+
+  /** Ctrl-D: write the renderer's internal state to logs/frame.txt so a
+   * rendering bug can be diagnosed from the renderer's own model (back-buffer),
+   * the scrollback's current visible rows, and the exact bytes last sent to the
+   * terminal — without a screenshot. */
+  dumpDebug(): void {
+    const { rows, cols } = this.screen.size();
+    const sc = this.scrollback.debugState();
+    const sd = this.screen.debugState();
+    const esc = (s: string) => s.replaceAll("\x1b", "\\e");
+    const out: string[] = [];
+    out.push("=== rho-code debug dump ===");
+    out.push(`time: ${new Date().toISOString()}`);
+    out.push(`terminal: ${cols} cols × ${rows} rows`);
+    out.push(
+      `turn: inProgress=${turnInProgress} elapsed=${
+        this.turnStart
+          ? ((Date.now() - this.turnStart) / 1000).toFixed(1) + "s"
+          : "idle"
+      } activity=${
+        JSON.stringify(this.workingActivity)
+      } steers=${this.steerCount}`,
+    );
+    out.push(
+      `reasoning: ${
+        this.reasoningBlock
+          ? `id=${this.reasoningBlock.id} streaming=${this.reasoningBlock.streaming} expanded=${this.reasoningBlock.expanded} bufLen=${this.reasoningBlock.buf.length}`
+          : "null"
+      }`,
+    );
+    out.push(
+      `lastTool: ${
+        this.lastTool
+          ? `id=${this.lastTool.id} name=${this.lastTool.name} status=${this.lastTool.status} error=${this.lastTool.error} expanded=${this.lastTool.expanded}`
+          : "null"
+      }`,
+    );
+    out.push("");
+    out.push(
+      `scrollback: lineCount=${sc.lineCount} offset=${sc.offset} atBottom=${sc.atBottom} viewportHeight=${sc.viewportHeight}`,
+    );
+    out.push("");
+    const visible = this.scrollback.visible(sc.viewportHeight, cols);
+    out.push(
+      `--- scrollback visible (current output) — ${visible.length} rows ---`,
+    );
+    visible.forEach((r, i) =>
+      out.push(`[v${String(i).padStart(2)}] w=${visibleWidth(r)} | ${esc(r)}`)
+    );
+    out.push("");
+    if (sd.buf) {
+      out.push(`--- back-buffer (renderer model) — ${sd.buf.length} rows ---`);
+      sd.buf.forEach((r, i) =>
+        out.push(`[${String(i).padStart(2)}] w=${visibleWidth(r)} | ${esc(r)}`)
+      );
+    } else {
+      out.push("--- back-buffer: null (full repaint pending) ---");
+    }
+    out.push("");
+    out.push("--- raw last paint (bytes written on the last render) ---");
+    out.push(esc(sd.lastPaint));
+    out.push("");
+    try {
+      Deno.mkdirSync("logs", { recursive: true });
+      Deno.writeTextFileSync("logs/frame.txt", out.join("\n") + "\n");
+      this.push(
+        `${green}debug dump written to ${bold}logs/frame.txt${reset}`,
+      );
+    } catch (e) {
+      this.push(`${red}debug dump failed: ${e}${reset}`);
+    }
+    this.render();
+  }
+
+  /** Drain rho's stderr (its `tracing` logs) to nothing. Inherited stderr
+   * would write at the cursor — parked in the input box — corrupting the
+   * rendered frame and desyncing the back-buffer; piping + draining keeps the
+   * pipe empty (so rho never blocks) and the terminal untouched. The TUI
+   * surfaces the relevant state itself (model in the footer, context via
+   * /stats), so the raw logs are discarded. */
+  async stderrLoop(): Promise<void> {
+    const stderr = getChildStderr();
+    if (!stderr) return;
+    const reader = stderr.getReader();
+    try {
+      while (true) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    } catch {
+      // stderr closed — nothing to do.
+    }
   }
 
   // ── Shutdown ──────────────────────────────────────────────────────────

@@ -150,3 +150,170 @@ Deno.test("composePickerFrame: hides the hardware cursor", () => {
   assertEquals(composed.text.startsWith(esc + "[?25l"), true);
   assertEquals(composed.cursorRow, 8); // hint is the last row
 });
+
+// ── frameRows: the row-array form used by the diff renderer ─────────────────
+
+import {
+  clearLineFor,
+  frameRows,
+  paintPlan,
+  pickerRows,
+} from "../src/tui/screen.ts";
+
+Deno.test("frameRows: returns null when output would have no rows", () => {
+  assertEquals(frameRows(base(3, 20)), null);
+});
+
+Deno.test("frameRows: returns null when cols too narrow for a box", () => {
+  assertEquals(frameRows(base(30, 4)), null);
+});
+
+Deno.test("frameRows: row count equals the terminal height", () => {
+  const fr = frameRows(base(12, 16, ["a"]))!;
+  assertEquals(fr.rows.length, 12);
+});
+
+Deno.test("frameRows: cursor position matches composeFrame", () => {
+  const f = {
+    ...base(14, 20, ["one", "two", "three"]),
+    inputCursor: { row: 2, col: 0 },
+  };
+  const composed = composeFrame(f)!;
+  const fr = frameRows(f)!;
+  assertEquals(fr.cursorRow, composed.cursorRow);
+  assertEquals(fr.cursorCol, composed.cursorCol);
+});
+
+Deno.test("frameRows: rows joined with CLEAR_LINE+newline reproduce composeFrame", () => {
+  // The string composer is a thin joiner over frameRows — keep them in lockstep.
+  const f = {
+    rows: 12,
+    cols: 16,
+    lines: ["OUT1", "OUT2"],
+    footerLines: ["FOOT1", "FOOT2"],
+    inputRows: ["in"],
+    inputCursor: { row: 0, col: 0 },
+  };
+  const composed = composeFrame(f)!;
+  const fr = frameRows(f)!;
+  const esc = String.fromCharCode(27);
+  const joined = fr.rows
+    .map((r, i) => r + esc + "[K" + (i < fr.rows.length - 1 ? "\n" : ""))
+    .join("");
+  assertEquals(composed.text, esc + "[?25h" + esc + "[H" + joined);
+});
+
+Deno.test("frameRows: a working line sits between output and footer", () => {
+  const fr = frameRows({
+    rows: 10,
+    cols: 16,
+    lines: ["OUT1", "OUT2"],
+    footerLines: ["FOOT"],
+    workingLine: "WORK",
+    inputRows: ["in"],
+    inputCursor: { row: 0, col: 0 },
+  })!;
+  assertEquals(fr.rows.length, 10);
+  const text = fr.rows.map((r) => plain(r));
+  // Order: output lines, working line, footer, then the bordered input box.
+  assertEquals(text.indexOf("OUT1") < text.indexOf("WORK"), true);
+  assertEquals(text.indexOf("WORK") < text.indexOf("FOOT"), true);
+  const borderIdx = text.findIndex((r) => r.includes("\u250C"));
+  assertEquals(text.indexOf("FOOT") < borderIdx, true); // footer above the box
+});
+
+Deno.test("frameRows: a working line takes a row from output, not the input box", () => {
+  const base2 = (workingLine?: string) => ({
+    rows: 12,
+    cols: 20,
+    lines: [],
+    footerLines: [],
+    inputRows: [""],
+    inputCursor: { row: 0, col: 0 },
+    workingLine,
+  });
+  const without = frameRows(base2())!;
+  const withLine = frameRows(base2("WORK"))!;
+  // Input box stays anchored to the bottom; the working line eats an output row.
+  assertEquals(withLine.cursorRow, without.cursorRow);
+  assertEquals(withLine.rows.length, without.rows.length);
+});
+
+// ── pickerRows ─────────────────────────────────────────────────────────────
+
+Deno.test("pickerRows: returns null when too short", () => {
+  assertEquals(
+    pickerRows({ rows: 4, cols: 20, title: "t", rows_text: ["a"], hint: "h" }),
+    null,
+  );
+});
+
+Deno.test("pickerRows: row count equals the terminal height", () => {
+  const rows = pickerRows({
+    rows: 8,
+    cols: 20,
+    title: "t",
+    rows_text: ["a", "b"],
+    hint: "h",
+  })!;
+  assertEquals(rows.length, 8); // title + blank + 4 list + blank + hint
+});
+
+// ── paintPlan: the diff decision ───────────────────────────────────────────
+
+Deno.test("paintPlan: null prev forces a full repaint", () => {
+  const plan = paintPlan(null, null, ["a", "b"], "chat");
+  assertEquals(plan.full, true);
+  assertEquals(plan.rows, [{ index: 0, text: "a" }, { index: 1, text: "b" }]);
+});
+
+Deno.test("paintPlan: a mode change forces a full repaint", () => {
+  const plan = paintPlan(["a", "b"], "chat", ["a", "b"], "picker");
+  assertEquals(plan.full, true);
+  assertEquals(plan.rows.length, 2);
+});
+
+Deno.test("paintPlan: a row-count change forces a full repaint", () => {
+  const plan = paintPlan(["a", "b"], "chat", ["a"], "chat");
+  assertEquals(plan.full, true);
+});
+
+Deno.test("paintPlan: unchanged content yields no rows to paint", () => {
+  const plan = paintPlan(["a", "b"], "chat", ["a", "b"], "chat");
+  assertEquals(plan.full, false);
+  assertEquals(plan.rows, []);
+});
+
+Deno.test("paintPlan: only changed rows are listed", () => {
+  const plan = paintPlan(["a", "b", "c"], "chat", ["a", "X", "c"], "chat");
+  assertEquals(plan.full, false);
+  assertEquals(plan.rows, [{ index: 1, text: "X" }]);
+});
+
+Deno.test("paintPlan: multiple changed rows are listed in order", () => {
+  const plan = paintPlan(["a", "b", "c"], "chat", ["x", "b", "z"], "chat");
+  assertEquals(plan.rows, [{ index: 0, text: "x" }, { index: 2, text: "z" }]);
+});
+
+// ── clearLineFor: the per-row ESC[K decision ──────────────────────────────
+
+Deno.test("clearLineFor: a short row gets a clear-to-end suffix", () => {
+  assertEquals(clearLineFor("hi", 120), "\x1b[K");
+});
+
+Deno.test("clearLineFor: a full-width row gets no suffix (last cell preserved)", () => {
+  assertEquals(clearLineFor("a".repeat(120), 120), "");
+});
+
+Deno.test("clearLineFor: an over-wide row gets no suffix", () => {
+  assertEquals(clearLineFor("a".repeat(121), 120), "");
+});
+
+Deno.test("clearLineFor: width is ANSI-aware (escapes are zero-width)", () => {
+  const esc = String.fromCharCode(27);
+  // visible width 2 ("hi"), escapes zero-width → still short → clear.
+  assertEquals(clearLineFor(esc + "[2m" + "hi" + esc + "[0m", 120), "\x1b[K");
+  // visible width 120 (styled) → full → no clear.
+  const full = esc + "[2m" + "a".repeat(120) + esc + "[0m";
+  assertEquals(clearLineFor(full, 120), "");
+});

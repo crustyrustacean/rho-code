@@ -18,19 +18,20 @@ export function spawnRho(continueSession: boolean) {
     ],
     stdin: "piped",
     stdout: "piped",
-    stderr: "inherit",
+    stderr: "piped",
   });
 
   const child = command.spawn();
   const childStdin = child.stdin;
   const childStdout = child.stdout;
+  const childStderr = child.stderr;
 
-  if (!childStdin || !childStdout) {
-    console.error("Failed to pipe stdin/stdout");
+  if (!childStdin || !childStdout || !childStderr) {
+    console.error("Failed to pipe stdin/stdout/stderr");
     Deno.exit(1);
   }
 
-  return { child, childStdin, childStdout };
+  return { child, childStdin, childStdout, childStderr };
 }
 
 export function sendRequest(
@@ -81,6 +82,7 @@ export function dispatchResponse(msg: Record<string, unknown>): boolean {
 
 let childStdin: WritableStream<Uint8Array>;
 let childStdout: ReadableStream<Uint8Array>;
+let childStderr: ReadableStream<Uint8Array>;
 let child: Deno.ChildProcess;
 
 /** Wire the transport to the spawned child process. Must be called once. */
@@ -88,10 +90,12 @@ export function initTransport(
   c: Deno.ChildProcess,
   stdin: WritableStream<Uint8Array>,
   stdout: ReadableStream<Uint8Array>,
+  stderr: ReadableStream<Uint8Array>,
 ) {
   child = c;
   childStdin = stdin;
   childStdout = stdout;
+  childStderr = stderr;
 }
 
 export function getChild() {
@@ -100,4 +104,8 @@ export function getChild() {
 
 export function getChildStdout() {
   return childStdout;
+}
+
+export function getChildStderr() {
+  return childStderr;
 }

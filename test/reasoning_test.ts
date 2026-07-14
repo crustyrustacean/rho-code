@@ -1,6 +1,9 @@
 // Tests for the reasoning-block tail renderer.
 
-import { reasoningTailLines } from "../src/tui/reasoning.ts";
+import {
+  fullReasoningLines,
+  reasoningTailLines,
+} from "../src/tui/reasoning.ts";
 import { dim, italic, reset } from "../src/ansi.ts";
 import { assertEquals } from "@std/assert";
 
@@ -47,4 +50,30 @@ Deno.test("reasoningTailLines: the tail cap counts wrapped visual rows, not logi
 
 Deno.test("reasoningTailLines: maxRows <= 0 yields no rows", () => {
   assertEquals(reasoningTailLines("hello", 40, 0), []);
+});
+
+// ── fullReasoningLines: the expanded-block renderer ────────────────────────
+
+Deno.test("fullReasoningLines: empty buffer yields no rows", () => {
+  assertEquals(fullReasoningLines("", 40, 6), []);
+});
+
+Deno.test("fullReasoningLines: all lines returned when under the cap", () => {
+  const rows = fullReasoningLines("a\nb\nc", 40, 6);
+  assertEquals(rows.length, 3);
+  assertEquals(plain(rows[0]!), "a");
+  assertEquals(plain(rows[2]!), "c");
+});
+
+Deno.test("fullReasoningLines: caps at maxRows with a more-lines marker", () => {
+  const rows = fullReasoningLines("a\nb\nc\nd\ne", 40, 2);
+  assertEquals(rows.length, 3); // 2 kept + 1 marker
+  assertEquals(plain(rows[0]!), "a");
+  assertEquals(plain(rows[1]!), "b");
+  assertEquals(plain(rows[2]!).includes("3 more lines"), true);
+});
+
+Deno.test("fullReasoningLines: wraps long lines to cols", () => {
+  const rows = fullReasoningLines("abcdef", 3, 6);
+  assertEquals(rows.map(plain), ["abc", "def"]);
 });
