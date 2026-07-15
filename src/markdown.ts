@@ -96,3 +96,11 @@ export function flushMarkdownBuffer(): void {
     emit(reset);
   }
 }
+
+/** Reset all internal state (line buffer, code block tracking).
+ * Call between sessions so a mid-stream code block in one session
+ * doesn't leak formatting into the next. */
+export function resetMarkdown(): void {
+  lineBuffer = "";
+  inCodeBlock = false;
+}

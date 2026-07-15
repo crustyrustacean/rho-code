@@ -244,3 +244,33 @@ Deno.test("scrollDir: non-arrow keys never scroll", () => {
   assertEquals(scrollDir({ kind: "escape" }), null);
   assertEquals(scrollDir({ kind: "ctrl", char: "c" }), null);
 });
+
+// ── CSI sequences with intermediate / non-numeric param bytes ───────
+
+Deno.test("parseKey: CSI with private param byte '?' is consumed without bogus modifiers", () => {
+  // ESC [ ? 25 h (DECCKM — show cursor) is a DEC private-mode sequence.
+  // '?' (0x3F) is a private param byte; without filtering it produces NaN
+  // and corrupts modifier detection. After the fix, params should be [25]
+  // and 'h' is not a recognized key, so it falls through to an escape.
+  assertEquals(
+    parseKey(new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x35, 0x68])),
+    { key: { kind: "escape" }, consumed: 6 },
+  );
+});
+
+Deno.test("parseKey: CSI with intermediate byte (0x20 space) is consumed cleanly", () => {
+  // ESC [ 1 0 SPACE A — a hypothetical sequence with an intermediate space.
+  // The space (0x20) is stripped from params, leaving [1, 10].
+  // 'A' is an arrow-up final byte; params[1]=10 would be a bogus modifier,
+  // but the important thing is no NaN and the sequence is consumed.
+  const result = parseKey(
+    new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x31, 0x30, 0x20, 0x41]),
+  );
+  assertEquals(result?.consumed, 8);
+  assertEquals(result?.key.kind, "arrow");
+  if (result && result.key.kind === "arrow") {
+    // After stripping the space, params are [1, 10]; mod code 10 → no standard mod.
+    // The key should still parse as an arrow, just without useful mods.
+    assertEquals(result.key.dir, "up");
+  }
+});

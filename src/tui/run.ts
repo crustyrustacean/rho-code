@@ -32,11 +32,13 @@ import {
   getChildStdout,
   requestResponse,
   sendRequest,
+  setTransportErrorCallback,
 } from "../rpc.ts";
 import { dispatchCommand } from "../commands.ts";
 import { formatToolArgs } from "../format.ts";
 import {
   flushMarkdownBuffer,
+  resetMarkdown,
   setMarkdownSink,
   writeMarkdownChunk,
 } from "../markdown.ts";
@@ -134,6 +136,10 @@ export async function runTui(): Promise<void> {
   const tui = new Tui();
   // Route markdown + console output into the scrollback (one finished line each).
   setMarkdownSink((line) => tui.scrollback.push(line));
+  setTransportErrorCallback((msg) => {
+    tui.scrollback.push(red + msg + reset);
+    tui.render();
+  });
   const origLog = console.log;
   const origErr = console.error;
   console.log = (...args: unknown[]) => tui.scrollback.push(args.join(" "));
@@ -621,6 +627,7 @@ class Tui {
 
   /** Resume a session by path, updating the footer model/cwd. */
   async resumeSession(path: string): Promise<void> {
+    resetMarkdown();
     try {
       const result = await requestResponse("resumeSession", { path }) as {
         model: string;
@@ -931,6 +938,7 @@ class Tui {
   /** On `approval/request`: prompt in the scrollback; input is captured on submit. */
   onApprovalRequest(params: Record<string, unknown>): void {
     flushMarkdownBuffer();
+    resetMarkdown();
     const risk = params.risk as string;
     const riskColor = risk === "destructive"
       ? red
@@ -1172,6 +1180,16 @@ class Tui {
       }
     } catch {
       // stderr closed — nothing to do.
+    }
+    // If stderr closed but rho exited and the TUI hasn't shut down yet,
+    // outputLoop may be stuck on stdout. Trigger teardown.
+    if (!this.exited) {
+      try {
+        const status = await getChild().status;
+        if (status && status.code !== null) this.exit();
+      } catch {
+        // child already gone
+      }
     }
   }
 

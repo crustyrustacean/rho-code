@@ -3,6 +3,7 @@
 
 import { bold, cyan, dim, gray, green, red, reset, yellow } from "./ansi.ts";
 import { requestResponse, sendRequest } from "./rpc.ts";
+import { resetMarkdown } from "./markdown.ts";
 import { currentModel, setCurrentModel, setInPasteMode } from "./state.ts";
 
 // ── Command registry ────────────────────────────────────────────────────────
@@ -218,6 +219,7 @@ export function cmdClear() {
 /** Start a fresh session (new JSONL) via the `newSession` RPC. Keeps the
  * active model/provider; the old session is flushed and left on disk. */
 export async function cmdNewSession() {
+  resetMarkdown();
   try {
     const result = await requestResponse("newSession") as {
       sessionId: string;
@@ -431,6 +433,7 @@ export async function cmdResume(args: string) {
     console.log(`${red}usage:${reset} /resume <session-path>`);
     return;
   }
+  resetMarkdown();
   try {
     const result = await requestResponse("resumeSession", { path: args }) as {
       path: string;

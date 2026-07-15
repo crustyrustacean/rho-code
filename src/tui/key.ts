@@ -131,7 +131,12 @@ function parseCsi(buf: Uint8Array<ArrayBufferLike>): ParsedKey | null {
   }
   if (finalByte === -1) return null; // incomplete — wait for more bytes
   const consumed = i;
-  const paramStr = new TextDecoder().decode(buf.subarray(2, consumed - 1));
+  // Strip intermediate bytes (0x20–0x2F) and non-numeric param bytes from the
+  // param region so they don't produce NaN values. e.g. ESC [ ? 25 h has
+  // '?' as a private parameter byte; without filtering, params would be
+  // [NaN, 25] which corrupts modifier detection in modsFromParams.
+  const raw = new TextDecoder().decode(buf.subarray(2, consumed - 1));
+  const paramStr = raw.replaceAll(/[^0-9;]/g, "");
   const params = paramStr === "" ? [] : paramStr.split(";").map(Number);
   return { key: keyFromCsi(finalByte, params), consumed };
 }

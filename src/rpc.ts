@@ -8,7 +8,30 @@ const pendingRequests = new Map<
   (msg: Record<string, unknown>) => void
 >();
 
+/** True when the stdin pipe is broken (rho exited or stdin closed). */
+let writeBroken = false;
+
+/** Callback invoked when a write to rho's stdin fails. Set by the TUI. */
+let onTransportError: ((msg: string) => void) | null = null;
+
+/** Reset the broken-pipe flag. Used in tests to isolate transport state. */
+export function resetWriteBroken(): void {
+  writeBroken = false;
+}
+
+/** Set a callback for transport errors (e.g. broken stdin pipe). */
+export function setTransportErrorCallback(fn: (msg: string) => void): void {
+  onTransportError = fn;
+}
+
+/** Returns true if the transport stdin pipe is broken. */
+export function isWriteBroken(): boolean {
+  return writeBroken;
+}
 const RHO_BIN = "rho";
+
+/** Default timeout for requestResponse promises (ms). */
+export const RESPONSE_TIMEOUT_MS = 30_000;
 
 export function spawnRho(continueSession: boolean) {
   const command = new Deno.Command(RHO_BIN, {
@@ -34,10 +57,11 @@ export function spawnRho(continueSession: boolean) {
   return { child, childStdin, childStdout, childStderr };
 }
 
-export function sendRequest(
+export async function sendRequest(
   method: string,
   params: Record<string, unknown> = {},
-): string {
+): Promise<string> {
+  if (writeBroken) return crypto.randomUUID();
   const id = crypto.randomUUID();
   const message = JSON.stringify({
     jsonrpc: "2.0",
@@ -45,24 +69,52 @@ export function sendRequest(
     method,
     params,
   });
-  const writer = childStdin.getWriter();
-  writer.write(new TextEncoder().encode(message + "\n"));
-  writer.releaseLock();
+  try {
+    const writer = childStdin.getWriter();
+    await writer.write(new TextEncoder().encode(message + "\n"));
+    writer.releaseLock();
+  } catch {
+    writeBroken = true;
+    onTransportError?.("[transport error] rho stdin is closed");
+  }
   return id;
 }
 
 export function requestResponse(
   method: string,
   params: Record<string, unknown> = {},
+  timeoutMs = RESPONSE_TIMEOUT_MS,
 ): Promise<unknown> {
+  const idPromise = sendRequest(method, params);
   return new Promise((resolve, reject) => {
-    const id = sendRequest(method, params);
-    pendingRequests.set(id, (msg) => {
-      if (msg.error) {
-        reject(msg.error);
-      } else {
-        resolve(msg.result);
+    let settled = false;
+    let registeredId: string | null = null;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (registeredId) pendingRequests.delete(registeredId);
+      reject(new Error(`requestResponse timed out: ${method}`));
+    }, timeoutMs);
+    idPromise.then((id) => {
+      if (settled) return;
+      if (writeBroken) {
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error(`requestResponse failed: rho stdin is closed`));
+        return;
       }
+      registeredId = id;
+      pendingRequests.set(id, (msg) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (msg.error) {
+          reject(msg.error);
+        } else {
+          resolve(msg.result);
+        }
+      });
     });
   });
 }
