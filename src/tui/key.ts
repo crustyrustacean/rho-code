@@ -38,6 +38,7 @@ export interface ParsedKey {
 }
 
 const ESC = 0x1b;
+const decoder = new TextDecoder();
 
 /**
  * Parse one key from the start of a raw input buffer.
@@ -95,7 +96,7 @@ export function parseKey(buf: Uint8Array<ArrayBufferLike>): ParsedKey | null {
     };
   }
   if (buf.length < len) return null; // incomplete multi-byte sequence
-  const char = new TextDecoder().decode(buf.subarray(0, len));
+  const char = decoder.decode(buf.subarray(0, len));
   return { key: { kind: "char", char }, consumed: len };
 }
 
@@ -135,7 +136,7 @@ function parseCsi(buf: Uint8Array<ArrayBufferLike>): ParsedKey | null {
   // param region so they don't produce NaN values. e.g. ESC [ ? 25 h has
   // '?' as a private parameter byte; without filtering, params would be
   // [NaN, 25] which corrupts modifier detection in modsFromParams.
-  const raw = new TextDecoder().decode(buf.subarray(2, consumed - 1));
+  const raw = decoder.decode(buf.subarray(2, consumed - 1));
   const paramStr = raw.replaceAll(/[^0-9;]/g, "");
   const params = paramStr === "" ? [] : paramStr.split(";").map(Number);
   return { key: keyFromCsi(finalByte, params), consumed };

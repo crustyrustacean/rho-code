@@ -8,11 +8,9 @@
 // time from `cols`; the caller passes the current terminal width (resize
 // reflow is an accepted v1 limitation, consistent with wrap.ts).
 
-import { reset } from "../ansi.ts";
+import { consumeAnsiEscape, ESC, reset } from "../ansi.ts";
 import { padRight } from "./width.ts";
 import { wrapLine } from "./wrap.ts";
-
-const ESC = "\x1b";
 
 /** True if an SGR escape's params include a reset (empty, 0, or "...;0;..."). */
 function isSgrReset(esc: string): boolean {
@@ -33,26 +31,16 @@ function reapplyBgAfterResets(line: string, bgCode: string): string {
   let out = "";
   let i = 0;
   while (i < chars.length) {
-    const c = chars[i]!;
-    if (c === ESC) {
-      let j = i + 1;
-      let finalByte = "";
-      while (j < chars.length) {
-        const f = chars[j]!;
-        j += 1;
-        if (/[A-Za-z]/.test(f)) {
-          finalByte = f;
-          break;
-        }
-      }
-      if (finalByte === "") j = i + 1;
-      const esc = chars.slice(i, j).join("");
-      i = j;
-      out += esc;
-      if (finalByte === "m" && isSgrReset(esc)) out += bgCode;
+    if (chars[i] === ESC) {
+      const seq = consumeAnsiEscape(chars, i);
+      if (!seq) { i += 1; continue; }
+      out += seq.esc;
+      i = seq.end;
+      const finalByte = seq.esc[seq.esc.length - 1]!;
+      if (finalByte === "m" && isSgrReset(seq.esc)) out += bgCode;
       continue;
     }
-    out += c;
+    out += chars[i]!;
     i += 1;
   }
   return out;

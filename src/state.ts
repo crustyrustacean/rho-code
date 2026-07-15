@@ -16,11 +16,11 @@ export function setResolveApproval(
   resolveApproval = fn;
 }
 
-/** Resolved when rho emits the "ready" notification and the banner is shown. */
-export let readyResolve!: () => void;
-export const readyPromise = new Promise<void>((r) => {
-  readyResolve = r;
-});
+/** True once rho has emitted the "ready" notification. */
+export let isReady = false;
+export function setReady(v: boolean) {
+  isReady = v;
+}
 
 /** True while reasoning/thinking deltas are being streamed. */
 export let inReasoning = false;

@@ -124,10 +124,16 @@ export class Scrollback {
 
   /** Replace the last `n` lines with `lines` (a multi-line block repaint).
    *
-   * Used to live-update a tool-call block: the pending block is pushed, then
-   * repainted as success/error once the result arrives. When pinned to the
-   * bottom the view stays pinned; when scrolled up the view is kept over the
-   * same content (the offset tracks the net change in line count). */
+   * **Warning:** this method does **not** update the `#blocks` map. If
+   * `replaceLastN` overlaps a region tracked by `pushBlock`, the block map
+   * will point to stale `[start, len)` and subsequent `replaceBlock` calls
+   * will splice at the wrong location, corrupting the scrollback. Prefer
+   * `pushBlock` + `replaceBlock` for tracked content. Prefer `replaceLast`
+   * for single-line repaints.
+   *
+   * When pinned to the bottom the view stays pinned; when scrolled up
+   * the view is kept over the same content (the offset tracks the net
+   * change in line count). */
   replaceLastN(n: number, lines: string[]): void {
     const wasAtBottom = this.atBottom;
     const removeCount = Math.min(n, this.#lines.length);

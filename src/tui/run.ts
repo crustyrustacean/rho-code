@@ -45,10 +45,10 @@ import {
 import {
   currentModel,
   inPasteMode,
-  readyResolve,
   resolveApproval,
   setCurrentModel,
   setInPasteMode,
+  setReady,
   setResolveApproval,
   setTurnInProgress,
   turnInProgress,
@@ -776,10 +776,11 @@ class Tui {
       case "tool/call": {
         this.finishReasoning();
         flushMarkdownBuffer();
-        this.workingActivity = params.name as string;
+        const push = (msg: string) => this.push(msg);
+        this.workingActivity = param<string>(push, params, "name", isStr) ?? "";
         const tool: ToolBlockState = {
           id: this.nextBlockId++,
-          name: params.name as string,
+          name: param<string>(push, params, "name", isStr) ?? "(unknown)",
           args: formatToolArgs(params.arguments as string),
           status: "pending",
           error: false,
@@ -796,11 +797,12 @@ class Tui {
       }
 
       case "tool/result": {
-        const isError = params.is_error as boolean;
+        const push = (msg: string) => this.push(msg);
+        const isError = param<boolean>(push, params, "is_error", isBool);
         if (this.lastTool) {
           this.lastTool.status = "done";
-          this.lastTool.error = isError;
-          this.lastTool.fullOutput = params.output as string ?? "";
+          this.lastTool.error = isError === true;
+          this.lastTool.fullOutput = param<string>(push, params, "output", isStr) ?? "";
           this.lastTool.expanded = false;
           const cols = this.screen.size().cols;
           this.scrollback.replaceBlock(
@@ -849,11 +851,11 @@ class Tui {
         this.gitBranch = branch;
         this.render();
       });
-      readyResolve();
+      setReady(true);
       this.render();
     }).catch(() => {
       this.pushStartupBanner();
-      readyResolve(); // model stays blank; not fatal
+      setReady(true); // model stays blank; not fatal
     });
   }
 
@@ -1241,3 +1243,18 @@ function safeCwd(): string {
     return "";
   }
 }
+
+/** Extract a typed field from notification params, warning on mismatch.
+ *
+ * Returns `params[key]` cast via `typeof val === guard` if the value matches,
+ * otherwise `undefined` and pushes a `[protocol warning]` to the scrollback.
+ */
+function param<T>(push: (msg: string) => void, params: Record<string, unknown>, key: string, guard: (v: unknown) => v is T): T | undefined {
+  const val = params[key];
+  if (val === undefined || val === null) return undefined;
+  if (guard(val)) return val;
+  push(`${yellow}[protocol warning]${reset} ${key}: unexpected type ${typeof val}`);
+  return undefined;
+}
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isBool = (v: unknown): v is boolean => typeof v === "boolean";

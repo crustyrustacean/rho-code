@@ -7,7 +7,8 @@
 // Each code point counts as one column (double-width/CJK accounting is a known
 // v1 limitation). Wrapping is character-based, not word-based.
 
-const ESC = "\x1b";
+import { consumeAnsiEscape, ESC } from "../ansi.ts";
+
 
 /** Wrap `line` into segments each ≤ `cols` visible columns. */
 export function wrapLine(line: string, cols: number): string[] {
@@ -23,30 +24,19 @@ export function wrapLine(line: string, cols: number): string[] {
     const c = chars[i]!;
 
     if (c === ESC) {
-      // Consume an escape: ESC, any intermediates, then a final letter.
-      let j = i + 1;
-      let finalByte = "";
-      while (j < chars.length) {
-        const f = chars[j]!;
-        if (/[A-Za-z]/.test(f)) {
-          finalByte = f;
-          j++;
-          break;
-        }
-        j++;
-      }
-      if (finalByte === "") j = i + 1; // malformed escape; consume ESC only
-      const esc = chars.slice(i, j).join("");
-      i = j;
+      const seq = consumeAnsiEscape(chars, i);
+      if (!seq) { i += 1; continue; } // incomplete — skip
+      i = seq.end;
 
       // Track SGR state: a reset (empty params or 0) clears; anything else
       // accumulates into the active style to re-apply across wraps.
-      if (finalByte === "m" && esc.startsWith(`${ESC}[`)) {
-        const params = esc.slice(2, esc.length - 1);
+      const finalByte = seq.esc[seq.esc.length - 1]!;
+      if (finalByte === "m" && seq.esc.startsWith(`${ESC}[`)) {
+        const params = seq.esc.slice(2, seq.esc.length - 1);
         if (params === "" || params === "0") style = "";
-        else style += esc;
+        else style += seq.esc;
       }
-      out += esc; // escapes are zero-width; keep them inline where they occur
+      out += seq.esc; // escapes are zero-width; keep them inline where they occur
       continue;
     }
 

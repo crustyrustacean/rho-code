@@ -30,7 +30,10 @@ export function isWriteBroken(): boolean {
 }
 const RHO_BIN = "rho";
 
+const encoder = new TextEncoder();
+
 /** Default timeout for requestResponse promises (ms). */
+
 export const RESPONSE_TIMEOUT_MS = 30_000;
 
 export function spawnRho(continueSession: boolean) {
@@ -71,7 +74,7 @@ export async function sendRequest(
   });
   try {
     const writer = childStdin.getWriter();
-    await writer.write(new TextEncoder().encode(message + "\n"));
+    await writer.write(encoder.encode(message + "\n"));
     writer.releaseLock();
   } catch {
     writeBroken = true;

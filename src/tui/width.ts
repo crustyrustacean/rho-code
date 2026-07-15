@@ -3,9 +3,7 @@
 // and input.ts). ANSI escape sequences are zero-width. Kept pure — no I/O — so
 // the footer/block layout math is unit-testable.
 
-import { reset } from "../ansi.ts";
-
-const ESC = "\x1b";
+import { consumeAnsiEscape, ESC, reset } from "../ansi.ts";
 
 /** The visible (printable) width of a string: code-point count minus ANSI escapes. */
 export function visibleWidth(str: string): number {
@@ -13,15 +11,10 @@ export function visibleWidth(str: string): number {
   let i = 0;
   const chars = [...str];
   while (i < chars.length) {
-    const c = chars[i]!;
-    if (c === ESC) {
-      // Consume the whole escape: ESC, any intermediates, one final letter.
-      i += 1;
-      while (i < chars.length) {
-        const f = chars[i]!;
-        i += 1;
-        if (/[A-Za-z]/.test(f)) break;
-      }
+    if (chars[i] === "\x1b") {
+      const seq = consumeAnsiEscape(chars, i);
+      if (seq) i = seq.end;
+      else i += 1; // malformed — skip ESC
       continue;
     }
     width += 1;
@@ -57,26 +50,16 @@ export function truncateToWidth(
   while (i < chars.length) {
     const c = chars[i]!;
     if (c === ESC) {
-      // Copy the whole escape into the output (it precedes the cut, zero-width).
-      let j = i + 1;
-      let finalByte = "";
-      while (j < chars.length) {
-        const f = chars[j]!;
-        j += 1;
-        if (/[A-Za-z]/.test(f)) {
-          finalByte = f;
-          break;
-        }
-      }
-      if (finalByte === "") j = i + 1;
-      const esc = chars.slice(i, j).join("");
-      i = j;
-      if (finalByte === "m" && esc.startsWith(`${ESC}[`)) {
-        const params = esc.slice(2, esc.length - 1);
+      const seq = consumeAnsiEscape(chars, i);
+      if (!seq) { i += 1; continue; }
+      i = seq.end;
+      const finalByte = seq.esc[seq.esc.length - 1]!;
+      if (finalByte === "m" && seq.esc.startsWith(`${ESC}[`)) {
+        const params = seq.esc.slice(2, seq.esc.length - 1);
         if (params === "" || params === "0") style = "";
-        else style += esc;
+        else style += seq.esc;
       }
-      out += esc;
+      out += seq.esc;
       continue;
     }
     if (used >= budget) {
