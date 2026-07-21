@@ -1,6 +1,6 @@
 {
   "name": "rho-code",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Interactive REPL frontend for the rho coding agent",
   "license": "MIT",
   "author": "Jeff Mitchell",

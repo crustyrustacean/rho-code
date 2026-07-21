@@ -203,6 +203,25 @@ export function paintPlan(
   return { full: false, rows };
 }
 
+/** True if a paint would write nothing: no rows changed and the cursor did not
+ * move. Pure so the skip decision is unit-testable.
+ *
+ * The spinner tick fires every `SPINNER_INTERVAL_MS` even when idle; without
+ * this check, `#paint` would re-emit `HIDE_CURSOR + SHOW_CURSOR + position`
+ * ~8×/s with no content change, which visibly flickers the cursor on ConPTY.
+ * `plan.rows.length === 0` covers the "identical frame" case; the cursor check
+ * covers a re-render called with the same stable cursor (the idle tick). */
+export function paintIsNoop(
+  plan: PaintPlan,
+  cursor: { row: number; col: number } | null,
+  lastCursor: { row: number; col: number } | null,
+): boolean {
+  if (plan.rows.length > 0) return false; // content changed → must paint
+  if (cursor === null && lastCursor === null) return true; // picker, unchanged
+  if (cursor === null || lastCursor === null) return false; // cursor hide/show
+  return cursor.row === lastCursor.row && cursor.col === lastCursor.col;
+}
+
 /**
  * The clear-to-end suffix a row needs, or "" if none. A full-width (or wider)
  * row already fills the line; emitting `ESC[K` after it would, with autowrap
@@ -227,6 +246,9 @@ export class Screen {
   #lastRows = 0;
   #lastCols = 0;
   #lastPaint = ""; // raw bytes of the last #paint write, for the debug dump
+  /** Last cursor position painted (null = picker, cursor hidden). Lets the
+   * paint loop skip frames where nothing moved, avoiding idle cursor flicker. */
+  #lastCursor: { row: number; col: number } | null = null;
 
   /** Current terminal size (throws if not a TTY — check before entering). */
   size(): Size {
@@ -284,6 +306,7 @@ export class Screen {
     // Next enter()+render must do a full repaint.
     this.#buf = null;
     this.#mode = null;
+    this.#lastCursor = null;
   }
 
   /** Paint a chat frame with a diff against the last frame. Layout: output
@@ -340,6 +363,11 @@ export class Screen {
     cursor: { row: number; col: number } | null,
   ): void {
     const plan = paintPlan(this.#buf, this.#mode, next, mode);
+    // Idle fast path: nothing to write and the cursor hasn't moved. The spinner
+    // tick re-renders every 120ms even when idle; without this, re-asserting
+    // HIDE_CURSOR + SHOW_CURSOR + position 8×/s visibly flickers the cursor on
+    // ConPTY. `paintIsNoop` is pure so this skip is unit-testable.
+    if (paintIsNoop(plan, cursor, this.#lastCursor)) return;
     // When most of the screen changes (e.g. a streaming line scrolls the
     // viewport), a compact HOME + CRLF repaint is gentler on ConPTY than a
     // per-row cursor-positioned diff — fewer cursor moves, one batched write.
@@ -366,6 +394,7 @@ export class Screen {
     this.writeRaw(buf);
     this.#buf = next;
     this.#mode = mode;
+    this.#lastCursor = cursor; // null in picker mode
   }
 
   private writeRaw(text: string): void {

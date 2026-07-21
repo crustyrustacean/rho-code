@@ -9,7 +9,6 @@
 
 import { consumeAnsiEscape, ESC } from "../ansi.ts";
 
-
 /** Wrap `line` into segments each ≤ `cols` visible columns. */
 export function wrapLine(line: string, cols: number): string[] {
   if (cols <= 0) return [""];
@@ -25,7 +24,10 @@ export function wrapLine(line: string, cols: number): string[] {
 
     if (c === ESC) {
       const seq = consumeAnsiEscape(chars, i);
-      if (!seq) { i += 1; continue; } // incomplete — skip
+      if (!seq) {
+        i += 1;
+        continue;
+      } // incomplete — skip
       i = seq.end;
 
       // Track SGR state: a reset (empty params or 0) clears; anything else

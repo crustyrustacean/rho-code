@@ -51,7 +51,10 @@ export function truncateToWidth(
     const c = chars[i]!;
     if (c === ESC) {
       const seq = consumeAnsiEscape(chars, i);
-      if (!seq) { i += 1; continue; }
+      if (!seq) {
+        i += 1;
+        continue;
+      }
       i = seq.end;
       const finalByte = seq.esc[seq.esc.length - 1]!;
       if (finalByte === "m" && seq.esc.startsWith(`${ESC}[`)) {

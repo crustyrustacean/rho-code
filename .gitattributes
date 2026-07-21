@@ -1,0 +1,7 @@
+# Normalize all text files to LF line endings — in the repo and on checkout —
+# regardless of the contributor's core.autocrlf setting. Deno fmt expects LF,
+# and CRLF checkouts (the Windows autocrlf=true default) made
+# `deno fmt --check` fail on every file. This attribute is authoritative; it
+# overrides core.autocrlf for this repository.
+
+* text=auto eol=lf

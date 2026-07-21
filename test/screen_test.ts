@@ -156,6 +156,7 @@ Deno.test("composePickerFrame: hides the hardware cursor", () => {
 import {
   clearLineFor,
   frameRows,
+  paintIsNoop,
   paintPlan,
   pickerRows,
 } from "../src/tui/screen.ts";
@@ -316,4 +317,51 @@ Deno.test("clearLineFor: width is ANSI-aware (escapes are zero-width)", () => {
   // visible width 120 (styled) → full → no clear.
   const full = esc + "[2m" + "a".repeat(120) + esc + "[0m";
   assertEquals(clearLineFor(full, 120), "");
+});
+
+// ── paintIsNoop: the idle-tick skip decision ───────────────────────────────
+
+/** A PaintPlan with no rows to write (an unchanged frame). */
+const emptyPlan = paintPlan(["a", "b"], "chat", ["a", "b"], "chat");
+
+Deno.test("paintIsNoop: content changed → never a no-op (even if cursor same)", () => {
+  const changed = paintPlan(["a", "b"], "chat", ["a", "X"], "chat");
+  assertEquals(
+    paintIsNoop(changed, { row: 1, col: 1 }, { row: 1, col: 1 }),
+    false,
+  );
+});
+
+Deno.test("paintIsNoop: no content change, same cursor → no-op", () => {
+  assertEquals(
+    paintIsNoop(emptyPlan, { row: 5, col: 9 }, { row: 5, col: 9 }),
+    true,
+  );
+});
+
+Deno.test("paintIsNoop: no content change, cursor moved → must paint", () => {
+  assertEquals(
+    paintIsNoop(emptyPlan, { row: 5, col: 10 }, { row: 5, col: 9 }),
+    false,
+  );
+});
+
+Deno.test("paintIsNoop: picker→picker (cursor null both) → no-op", () => {
+  assertEquals(paintIsNoop(emptyPlan, null, null), true);
+});
+
+Deno.test("paintIsNoop: chat→picker cursor change (null vs object) → must paint", () => {
+  // Cursor disappearing (chat → picker) is a real change: the hardware cursor
+  // must be hidden. Not a no-op even though content is identical.
+  assertEquals(paintIsNoop(emptyPlan, null, { row: 5, col: 9 }), false);
+  assertEquals(paintIsNoop(emptyPlan, { row: 5, col: 9 }, null), false);
+});
+
+Deno.test("paintIsNoop: a full-repaint plan is never a no-op", () => {
+  // First paint / mode switch / row-count change → full plan with all rows.
+  const full = paintPlan(null, null, ["a", "b"], "chat");
+  assertEquals(
+    paintIsNoop(full, { row: 1, col: 1 }, { row: 1, col: 1 }),
+    false,
+  );
 });

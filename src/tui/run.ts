@@ -145,11 +145,12 @@ export async function runTui(): Promise<void> {
   console.log = (...args: unknown[]) => tui.scrollback.push(args.join(" "));
   console.error = (...args: unknown[]) =>
     tui.scrollback.push(red + args.join(" ") + reset);
-
-  // Re-render at the spinner cadence while a turn runs so the footer's
-  // spinner animates and the elapsed time ticks.
+  // Re-render at the spinner cadence so the footer spinner animates and
+  // the elapsed time ticks. Also makes resize detection reactive — the
+  // terminal dimensions are polled every SPINNER_INTERVAL_MS even when
+  // idle, so the first render after a resize picks up the new size.
   const tick = setInterval(() => {
-    if (turnInProgress) tui.render();
+    tui.render();
   }, SPINNER_INTERVAL_MS);
   try {
     tui.screen.enter();
@@ -189,6 +190,9 @@ class Tui {
   pickerProviders: ProviderEntry[] = [];
   pasteBuf: string[] = [];
   exited = false;
+  /** Last terminal dimensions seen by render(), for resize detection. */
+  _lastRenderRows = 0;
+  _lastRenderCols = 0;
 
   // Cumulative session token usage (accumulated from `usage` notifications).
   cumInput = 0;
@@ -221,6 +225,28 @@ class Tui {
       return;
     }
     const { rows, cols } = this.screen.size();
+
+    // Detect terminal resize and rebuild width-dependent tracked blocks
+    // at the new column width so background padding and wraps reflow.
+    if (
+      this._lastRenderRows && this._lastRenderCols &&
+      (this._lastRenderRows !== rows || this._lastRenderCols !== cols)
+    ) {
+      if (this.reasoningBlock) {
+        this.scrollback.replaceBlock(
+          this.reasoningBlock.id,
+          this.buildReasoningLines(this.reasoningBlock, cols),
+        );
+      }
+      if (this.lastTool) {
+        this.scrollback.replaceBlock(
+          this.lastTool.id,
+          this.buildToolBlockLines(this.lastTool, cols),
+        );
+      }
+    }
+    this._lastRenderRows = rows;
+    this._lastRenderCols = cols;
     const footerLines = this.footerLines(cols);
     const workingLine = this.workingLine();
     const footerH = footerLines.length;
@@ -688,12 +714,17 @@ class Tui {
           const msg = JSON.parse(line);
           if (dispatchResponse(msg)) continue;
           this.handleNotification(msg);
-          this.render();
         } catch {
           this.push(`${red}[parse error]${reset} ${line}`);
-          this.render();
         }
       }
+      // One paint per chunk, not per line. A streaming turn can deliver many
+      // deltas in a single stdout read; rendering after each tears on ConPTY
+      // (many partial paints) and is wasted work — handleNotification only
+      // mutates state, so coalescing to the final frame is both smoother and
+      // correct. (Async handlers like onReady render themselves when they
+      // settle, so they aren't affected by this batching.)
+      this.render();
     }
     // rho's stdout closed — the agent process exited.
     if (!this.exited) {
@@ -802,7 +833,8 @@ class Tui {
         if (this.lastTool) {
           this.lastTool.status = "done";
           this.lastTool.error = isError === true;
-          this.lastTool.fullOutput = param<string>(push, params, "output", isStr) ?? "";
+          this.lastTool.fullOutput =
+            param<string>(push, params, "output", isStr) ?? "";
           this.lastTool.expanded = false;
           const cols = this.screen.size().cols;
           this.scrollback.replaceBlock(
@@ -1249,11 +1281,18 @@ function safeCwd(): string {
  * Returns `params[key]` cast via `typeof val === guard` if the value matches,
  * otherwise `undefined` and pushes a `[protocol warning]` to the scrollback.
  */
-function param<T>(push: (msg: string) => void, params: Record<string, unknown>, key: string, guard: (v: unknown) => v is T): T | undefined {
+function param<T>(
+  push: (msg: string) => void,
+  params: Record<string, unknown>,
+  key: string,
+  guard: (v: unknown) => v is T,
+): T | undefined {
   const val = params[key];
   if (val === undefined || val === null) return undefined;
   if (guard(val)) return val;
-  push(`${yellow}[protocol warning]${reset} ${key}: unexpected type ${typeof val}`);
+  push(
+    `${yellow}[protocol warning]${reset} ${key}: unexpected type ${typeof val}`,
+  );
   return undefined;
 }
 const isStr = (v: unknown): v is string => typeof v === "string";

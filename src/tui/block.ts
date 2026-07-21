@@ -33,7 +33,10 @@ function reapplyBgAfterResets(line: string, bgCode: string): string {
   while (i < chars.length) {
     if (chars[i] === ESC) {
       const seq = consumeAnsiEscape(chars, i);
-      if (!seq) { i += 1; continue; }
+      if (!seq) {
+        i += 1;
+        continue;
+      }
       out += seq.esc;
       i = seq.end;
       const finalByte = seq.esc[seq.esc.length - 1]!;
