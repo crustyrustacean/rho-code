@@ -1,14 +1,18 @@
-// Footer + working-line builders, mirroring pi's FooterComponent. Pure: given
-// a snapshot of session state and the terminal width, returns the rendered
-// lines (no I/O). Layout:
-//   footer line 1: `cwd (git-branch) · session-name` — dim, ~-substituted, truncated.
-//   footer line 2: `↑in ↓out R:cached $cost ctx%/window(auto)` (left, dim) … `model`
-//                  (right, dim). The context % is red >90%, yellow >70%, else dim.
-//   working line (transient, above the footer while a turn runs): spinner +
-//     `Working` + elapsed + activity + steer count.
+// Command-bar, footer, and working-line builders. Pure: given a snapshot of
+// session state and the terminal width, returns the rendered lines (no I/O).
+// Layout:
+//   command bar (sticky, top): a compact, dim hint strip of the most useful
+//     slash commands and keybindings — always visible while the scrollback
+//     flows underneath.
+//   footer (sticky, very bottom, 2 lines, mirrors pi's FooterComponent):
+//     line 1 `cwd (git-branch) • session` — dim, ~-substituted, truncated;
+//     line 2 `↑in ↓out R:cached $cost ctx%/window(auto)` (left, dim) … `model`
+//     (right, dim). Context % red >90%, yellow >70%.
+//   working line (transient, above the input box while a turn runs): spinner +
+//     `Working` + elapsed + activity + `↻N: preview` (latest steer, if any).
 
 import { bold, dim, gray, red, reset, yellow } from "../ansi.ts";
-import { truncateToWidth, visibleWidth } from "./width.ts";
+import { padRight, truncateToWidth, visibleWidth } from "./width.ts";
 
 /** Compact token-count formatting, matching pi's footer. */
 export function formatTokens(count: number): string {
@@ -66,7 +70,25 @@ function contextPart(s: FooterState): string {
   return `${color}${text}${reset}`;
 }
 
-/** Build the two footer lines for the given state and terminal width. */
+// ── Command bar (sticky top) ──────────────────────────────────────────────
+
+/** Build the sticky TOP command-hint bar: a compact, dim strip of the most
+ * useful slash commands and keybindings. Keeps the reference visible while the
+ * scrollback flows underneath. Truncates to `width` (the leftmost, most-used
+ * commands survive) and pads to full width so the row fills the line. Pure. */
+export function buildCommandBar(width: number): string {
+  const cmds = "/help /model /resume /compact /stats /new /quit";
+  const keys = "Ctrl-L · Ctrl-O · Ctrl-T · Ctrl-J";
+  const text = `${cmds}  ${keys}`;
+  const styled = `${dim}${truncateToWidth(text, width, "")}${reset}`;
+  return padRight(styled, width);
+}
+
+// ── Footer (sticky bottom, pi-style two lines) ────────────────────────────
+
+/** Build the two footer lines for the given state and terminal width.
+ * Mirrors pi's FooterComponent: line 1 `cwd (git-branch) • session`, line 2
+ * token/cost/context stats (left) + model (right). Pure. */
 export function buildFooter(s: FooterState): string[] {
   const pwd = `${dim}${truncateToWidth(formatPwd(s), s.width, "...")}${reset}`;
   const stats = buildStatsLine(s);
@@ -118,7 +140,7 @@ function buildStatsLine(s: FooterState): string {
 
 // ── Working status line ───────────────────────────────────────────────────
 
-/** Snapshot for the transient "Working" line shown above the footer while an
+/** Snapshot for the transient "Working" line shown above the input box while an
  * agent turn runs. */
 export interface WorkingLineState {
   spinner: string;
@@ -127,12 +149,16 @@ export interface WorkingLineState {
   activity?: string;
   /** Steering messages sent during the current turn (0 hides the indicator). */
   steers?: number;
+  /** Preview text of the most recent steer; shown as `↻N: preview` so the latest
+   * steering message stays visible while the turn runs, instead of scrolling
+   * away in the output region. */
+  steerPreview?: string;
 }
 
 /**
  * Build the working-status line: spinner + "Working" + elapsed + activity +
- * steer count. Pure. Left-aligned (not padded) — the renderer clears the rest
- * of the row.
+ * `↻N[: preview]`. Pure. Left-aligned (not padded) — the renderer clears the
+ * rest of the row.
  */
 export function buildWorkingLine(s: WorkingLineState): string {
   const secs = (s.elapsedMs / 1000).toFixed(1);
@@ -140,6 +166,9 @@ export function buildWorkingLine(s: WorkingLineState): string {
     `${yellow}${s.spinner}${reset} ${bold}Working${reset} ${dim}${secs}s${reset}`,
   ];
   if (s.activity) parts.push(`${gray}${s.activity}${reset}`);
-  if (s.steers && s.steers > 0) parts.push(`${yellow}↻${s.steers}${reset}`);
+  if (s.steers && s.steers > 0) {
+    const preview = s.steerPreview ? `: ${s.steerPreview}` : "";
+    parts.push(`${yellow}↻${s.steers}${reset}${dim}${preview}${reset}`);
+  }
   return parts.join(" ");
 }

@@ -28,16 +28,18 @@ const DECAWM_ON = "\x1b[?7h"; //  cell can't trigger a scroll/linefeed
 
 /** One screen frame for [`Screen.render`] / [`composeFrame`]. */
 export interface Frame {
+  /** Sticky top header rows (cwd/model/context), pre-sized to terminal width. */
+  headerLines: string[];
   /** Output lines, already sized to the output region's height. */
   lines: string[];
-  /** Footer rows (cwd/stats), each pre-sized to the terminal width. */
+  /** Sticky bottom footer rows (token/cost stats), each pre-sized to width. */
   footerLines: string[];
   /** Visible input rows (already wrapped to `cols - 4` and windowed). */
   inputRows: string[];
   /** Cursor position within `inputRows`. */
   inputCursor: { row: number; col: number };
   /** Optional working-status line shown between the output region and the
-   * footer while an agent turn runs. */
+   * input box while an agent turn runs. */
   workingLine?: string;
 }
 
@@ -74,26 +76,29 @@ export interface Size {
 
 /** The logical rows + cursor position for a chat frame. Pure.
  *
- * Each returned row is a styled string of visible width `cols` (output/footer
- * rows are padded by the caller; borders and input rows are padded here).
+ * Layout (top → bottom): sticky header (H rows) · output region · optional
+ * working line · bordered input box · sticky footer (F rows). Each returned
+ * row is a styled string of visible width `cols` (output/footer/header rows
+ * are padded by the caller; borders and input rows are padded here).
  * Returns `null` when the terminal is too small to show at least one output
  * row plus the bordered input box. */
 export function frameRows(
   f: FrameInput,
 ): { rows: string[]; cursorRow: number; cursorCol: number } | null {
   const { rows, cols } = f;
+  const headerH = f.headerLines.length;
   const footerH = f.footerLines.length;
   const borderH = 2;
   const inputH = f.inputRows.length + borderH;
   const extra = f.workingLine ? 1 : 0;
-  const outputH = rows - footerH - extra - inputH;
+  const outputH = rows - headerH - footerH - extra - inputH;
   const innerWidth = cols - 4;
   if (outputH < 1 || innerWidth < 1) return null;
 
   const out: string[] = [];
+  for (const h of f.headerLines) out.push(h + reset);
   for (let r = 0; r < outputH; r++) out.push((f.lines[r] ?? "") + reset);
   if (f.workingLine) out.push(f.workingLine + reset);
-  for (const fl of f.footerLines) out.push(fl + reset);
   // Bordered input box.
   out.push(gray + "\u250C" + "\u2500".repeat(cols - 2) + "\u2510" + reset);
   for (const row of f.inputRows) {
@@ -103,8 +108,14 @@ export function frameRows(
     );
   }
   out.push(gray + "\u2514" + "\u2500".repeat(cols - 2) + "\u2518" + reset);
+  for (const fl of f.footerLines) out.push(fl + reset);
 
-  const inputTopRow = outputH + extra + footerH + 1; // 1-based row of the top border
+  // Cursor row: header + output + workingExtra + 1 lands the top border
+  // (1-based); +1 steps past it onto the first input row; +inputCursor.row
+  // moves to the cursor's input line. The footer is NOT added — it sits
+  // *below* the input box now, not above it (the old layout had it above,
+  // which is why this used to include footerH).
+  const inputTopRow = headerH + outputH + extra + 1; // 1-based row of the top border
   const cursorRow = inputTopRow + 1 + f.inputCursor.row;
   const cursorCol = 3 + f.inputCursor.col; // │(1) + space(1) + col, 1-based
   return { rows: out, cursorRow, cursorCol };
@@ -113,9 +124,9 @@ export function frameRows(
 /**
  * Compose a full-screen chat frame as an ANSI string + cursor position. Pure.
  *
- * Layout (top → bottom): output region · footer (N rows) · bordered input box
- * (top border, one row per `inputRows`, bottom border). Returns `null` when the
- * terminal is too small to show at least one output row plus the box.
+ * Layout (top → bottom): header · output region · optional working line ·
+ * bordered input box · footer. Returns `null` when the terminal is too small
+ * to show at least one output row plus the box.
  */
 export function composeFrame(f: FrameInput): ComposedFrame | null {
   const fr = frameRows(f);

@@ -59,7 +59,7 @@ import { parseKey, scrollDir } from "./key.ts";
 import { Scrollback } from "./scrollback.ts";
 import { Screen } from "./screen.ts";
 import { blockLines } from "./block.ts";
-import { buildFooter, buildWorkingLine } from "./footer.ts";
+import { buildCommandBar, buildFooter, buildWorkingLine } from "./footer.ts";
 import { formatModelRow, formatProviderRow, Picker } from "./picker.ts";
 import { fullReasoningLines, reasoningTailLines } from "./reasoning.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "./spinner.ts";
@@ -209,6 +209,10 @@ class Tui {
   // Steers sent during the current turn (reset on agent/end). Shown in the
   // working line as a live `↻N` indicator while the turn processes them.
   steerCount = 0;
+  /** Preview text of the most recent steer; surfaced in the working line as
+   * `↻N: preview` so the latest steering message stays visible while the turn
+   * runs, instead of scrolling away under newer output. */
+  lastSteerPreview = "";
   // Current activity label for the working line ("thinking" / tool name /
   // "responding"), updated as notifications arrive during a turn.
   workingActivity = "";
@@ -247,16 +251,18 @@ class Tui {
     }
     this._lastRenderRows = rows;
     this._lastRenderCols = cols;
-    const footerLines = this.footerLines(cols);
+    const headerLines = this.headerLines(cols);
+    const footerLines = this.statsFooterLines(cols);
     const workingLine = this.workingLine();
+    const headerH = headerLines.length;
     const footerH = footerLines.length;
     const extra = workingLine ? 1 : 0;
     const innerWidth = Math.max(1, cols - 4);
     // Cap the input box so it never crowds out the output region (reserve one
-    // output row + the two border rows).
+    // output row + the two border rows, plus the sticky header/footer chrome).
     const maxInputRows = Math.max(
       1,
-      Math.min(MAX_INPUT_ROWS, rows - footerH - 3),
+      Math.min(MAX_INPUT_ROWS, rows - headerH - footerH - 3),
     );
     const view = inputView(
       this.editor.text,
@@ -266,12 +272,13 @@ class Tui {
     );
     const outputHeight = Math.max(
       1,
-      rows - footerH - extra - view.rows.length - 2,
+      rows - headerH - footerH - extra - view.rows.length - 2,
     );
     this.scrollback.viewportHeight = outputHeight;
     this.screen.render({
       rows,
       cols,
+      headerLines,
       lines: this.scrollback.visible(outputHeight, cols),
       footerLines,
       workingLine,
@@ -280,9 +287,16 @@ class Tui {
     });
   }
 
-  /** Build the footer rows for the current state at `cols` width. The working
-   * indicator lives on its own line (see `workingLine`). */
-  footerLines(cols: number): string[] {
+  /** Build the sticky TOP command-hint bar: a compact, dim strip of the most
+   * useful slash commands and keybindings. Always visible while the scrollback
+   * flows, so the reference is one glance away. */
+  headerLines(cols: number): string[] {
+    return [buildCommandBar(cols)];
+  }
+
+  /** Build the sticky BOTTOM footer (pi-style two lines): line 1
+   * `cwd (git-branch)`, line 2 `↑in ↓out R:cached $cost ctx%/window model`. */
+  statsFooterLines(cols: number): string[] {
     return buildFooter({
       cwd: this.cwd || safeCwd(),
       home: safeEnv("HOME") ?? safeEnv("USERPROFILE"),
@@ -302,8 +316,9 @@ class Tui {
     });
   }
 
-  /** The transient "Working" line shown above the footer while a turn runs, or
-   * undefined when idle. */
+  /** The transient "Working" line shown above the input box while a turn runs, or
+   * undefined when idle. Includes the latest steer preview so steering messages
+   * stay visible instead of scrolling away in the output region. */
   workingLine(): string | undefined {
     if (!turnInProgress || this.turnStart <= 0) return undefined;
     return buildWorkingLine({
@@ -311,6 +326,7 @@ class Tui {
       elapsedMs: Date.now() - this.turnStart,
       activity: this.workingActivity,
       steers: this.steerCount,
+      steerPreview: this.lastSteerPreview,
     });
   }
 
@@ -353,8 +369,14 @@ class Tui {
     // dedicated PgUp/PgDn keys, so a modifier + arrow pages through history).
     const sdir = scrollDir(key);
     if (sdir) {
-      const { rows } = this.screen.size();
-      const page = Math.max(1, rows - 3);
+      // Page by the live output-region height (set by render each frame), so a
+      // page jump fits the actual viewport and never lands inside the
+      // header/input/footer chrome.
+      const page = Math.max(
+        1,
+        this.scrollback.viewportHeight ||
+          Math.max(1, this.screen.size().rows - 6),
+      );
       this.scrollback.viewportHeight = page;
       if (sdir === "up") this.scrollback.scrollUp(page);
       else this.scrollback.scrollDown(page);
@@ -471,6 +493,10 @@ class Tui {
       const cols = this.screen.size().cols;
       const firstLine = message.split("\n")[0] ?? "";
       const preview = truncateToWidth(firstLine, Math.max(10, cols - 18), "…");
+      // Keep the latest steer preview for the working line (`↻N: preview`) so the
+      // steering message stays visible while the turn runs instead of being
+      // buried by newer output. It's still echoed to the scrollback too.
+      this.lastSteerPreview = preview;
       this.push(`${dim}↳ steer (${this.steerCount}): ${preview}${reset}`);
     } else {
       this.echoUser(message);
@@ -751,6 +777,7 @@ class Tui {
       case "agent/start":
         this.turnStart = Date.now();
         this.steerCount = 0;
+        this.lastSteerPreview = "";
         this.workingActivity = "";
         setTurnInProgress(true);
         break;
@@ -938,6 +965,7 @@ class Tui {
     if (parts.length > 0) this.push(`${dim}  ${parts.join(" · ")}${reset}`);
     this.turnStart = 0; // stop the spinner / elapsed counter
     this.steerCount = 0; // steers processed — clear the indicator
+    this.lastSteerPreview = "";
     this.workingActivity = "";
     try {
       const stats = await requestResponse("getSessionStats") as {

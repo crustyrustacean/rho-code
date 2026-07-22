@@ -1,9 +1,12 @@
-// Tests for the two-line footer builder (pwd line + stats/model line). Pure:
-// given a snapshot of session state and the terminal width, returns the two
-// rendered lines. Mirrors pi's FooterComponent layout (pwd · branch · session
-// on top; token/cost/context stats left, model right, both dim).
+// Tests for the command bar, footer, and working-line builders. Pure: given a
+// snapshot of session state and the terminal width, returns the rendered
+// lines. The footer mirrors pi's FooterComponent (cwd · branch · session on
+// line 1; token/cost/context stats left, model right, both dim, on line 2);
+// the command bar is a compact sticky hint strip; the working line is the
+// transient spinner/elapsed/activity/steer-preview shown during a turn.
 
 import {
+  buildCommandBar,
   buildFooter,
   buildWorkingLine,
   formatTokens,
@@ -48,6 +51,36 @@ Deno.test("formatTokens: <1k raw, <10k one decimal, <1M rounded k, <10M one-deci
   assertEquals(formatTokens(1_500_000), "1.5M");
   assertEquals(formatTokens(25_000_000), "25M");
 });
+
+// ── Command bar (sticky top) ──────────────────────────────────────────────
+
+Deno.test("commandBar: includes the core slash commands and key hints", () => {
+  const text = plain(buildCommandBar(120));
+  assertEquals(text.includes("/help"), true);
+  assertEquals(text.includes("/model"), true);
+  assertEquals(text.includes("/resume"), true);
+  assertEquals(text.includes("/compact"), true);
+  assertEquals(text.includes("/quit"), true);
+  assertEquals(text.includes("Ctrl-L"), true);
+  assertEquals(text.includes("Ctrl-O"), true);
+});
+
+Deno.test("commandBar: fills the full width so the last cell survives the clear", () => {
+  // A full-width row must not trigger the renderer's ESC[K (which erases the
+  // last cell under autowrap-off). The bar should fill exactly `width`.
+  assertEquals(visibleWidth(buildCommandBar(80)), 80);
+  assertEquals(visibleWidth(buildCommandBar(120)), 120);
+});
+
+Deno.test("commandBar: truncated cleanly when narrower than the hint text", () => {
+  // On a narrow terminal the leftmost (most-used) commands survive; the row
+  // still fills exactly `width` with no spurious overflow.
+  const bar = buildCommandBar(20);
+  assertEquals(visibleWidth(bar), 20);
+  assertEquals(plain(bar).startsWith("/help"), true);
+});
+
+// ── Footer (sticky bottom, pi-style two lines) ─────────────────────────────
 
 Deno.test("footer pwd line: substitutes home with ~, appends branch and session", () => {
   const [pwd] = buildFooter({ ...base, sessionName: "release audit" });
@@ -136,6 +169,8 @@ Deno.test("footer stats line: no token parts when usage is zero/absent", () => {
   assertEquals(text.includes("0%/200k(auto)"), true);
 });
 
+// ── Working status line ───────────────────────────────────────────────────
+
 Deno.test("buildWorkingLine: spinner + Working + elapsed + activity + steers", () => {
   const line = buildWorkingLine({
     spinner: "\u280B",
@@ -147,6 +182,27 @@ Deno.test("buildWorkingLine: spinner + Working + elapsed + activity + steers", (
   assertEquals(text.startsWith("\u280B Working 3.2s"), true);
   assertEquals(text.includes("thinking"), true);
   assertEquals(text.includes("\u21BB2"), true); // ↻2
+});
+
+Deno.test("buildWorkingLine: steer preview appended to the steer count", () => {
+  const line = buildWorkingLine({
+    spinner: "\u280B",
+    elapsedMs: 3200,
+    activity: "thinking",
+    steers: 3,
+    steerPreview: "use fewer files",
+  });
+  const text = plain(line);
+  assertEquals(text.includes("\u21BB3: use fewer files"), true); // ↻3: use fewer files
+});
+
+Deno.test("buildWorkingLine: no preview shown when steerPreview absent", () => {
+  const line = buildWorkingLine({
+    spinner: "\u280B",
+    elapsedMs: 1000,
+    steers: 1,
+  });
+  assertEquals(plain(line).includes(":"), false); // no `↻N: …` colon
 });
 
 Deno.test("buildWorkingLine: omits activity and steers when absent/zero", () => {

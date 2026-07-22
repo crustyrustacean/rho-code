@@ -15,6 +15,7 @@ function plain(s: string): string {
 const base = (rows: number, cols: number, inputRows = [""]) => ({
   rows,
   cols,
+  headerLines: [],
   lines: [],
   footerLines: [],
   inputRows,
@@ -72,22 +73,42 @@ Deno.test("composeFrame: cursor row tracks the input cursor across lines", () =>
   assertEquals(composed.cursorRow, 13);
 });
 
-Deno.test("composeFrame: output + footer sit above the input box", () => {
+Deno.test("composeFrame: cursor lands inside the box even with header+footer chrome", () => {
+  // Regression: the footer sits BELOW the input box now, so the cursor row
+  // must NOT add footerH. With header(1) + footer(1) + 1 input row on a 12-row
+  // frame, output = 12-1-1-2-1 = 7; top border at row 1+7+1 = 9 (header then
+  // 7 output rows → row 8 is the last output; row 9 is the top border), input
+  // content on row 10. If footerH were wrongly added, the cursor would land on
+  // the bottom border (row 11) — one row too low.
+  const composed = composeFrame({
+    rows: 12,
+    cols: 20,
+    headerLines: ["HEAD"],
+    lines: Array(7).fill("OUT"),
+    footerLines: ["FOOT"],
+    inputRows: ["in"],
+    inputCursor: { row: 0, col: 0 },
+  })!;
+  assertEquals(composed.cursorRow, 10); // the single input row, inside the box
+});
+
+Deno.test("composeFrame: output sits above the box, footer below it", () => {
   const composed = composeFrame({
     rows: 12,
     cols: 16,
+    headerLines: [],
     lines: ["OUT1", "OUT2"],
     footerLines: ["FOOT1", "FOOT2"],
     inputRows: ["in"],
     inputCursor: { row: 0, col: 0 },
   })!;
   const text = plain(composed.text);
-  // Order: output lines, then footer, then the bordered box.
+  // Order: output lines, then the bordered box, then the footer.
   const outIdx = text.indexOf("OUT1");
   const footIdx = text.indexOf("FOOT1");
   const boxIdx = text.indexOf("\u250C");
-  assertEquals(outIdx < footIdx, true);
-  assertEquals(footIdx < boxIdx, true);
+  assertEquals(outIdx < boxIdx, true);
+  assertEquals(boxIdx < footIdx, true);
 });
 
 Deno.test("composeFrame: borders use the gray accent color", () => {
@@ -190,6 +211,7 @@ Deno.test("frameRows: rows joined with CLEAR_LINE+newline reproduce composeFrame
   const f = {
     rows: 12,
     cols: 16,
+    headerLines: [],
     lines: ["OUT1", "OUT2"],
     footerLines: ["FOOT1", "FOOT2"],
     inputRows: ["in"],
@@ -204,10 +226,26 @@ Deno.test("frameRows: rows joined with CLEAR_LINE+newline reproduce composeFrame
   assertEquals(composed.text, esc + "[?25h" + esc + "[H" + joined);
 });
 
-Deno.test("frameRows: a working line sits between output and footer", () => {
+Deno.test("frameRows: a header sits above the output region", () => {
+  const fr = frameRows({
+    rows: 12,
+    cols: 16,
+    headerLines: ["HEAD"],
+    lines: ["OUT1"],
+    footerLines: ["FOOT"],
+    inputRows: ["in"],
+    inputCursor: { row: 0, col: 0 },
+  })!;
+  const text = fr.rows.map((r) => plain(r));
+  assertEquals(text.indexOf("HEAD") < text.indexOf("OUT1"), true);
+  assertEquals(text.indexOf("OUT1") < text.indexOf("FOOT"), true);
+});
+
+Deno.test("frameRows: a working line sits between output and the input box", () => {
   const fr = frameRows({
     rows: 10,
     cols: 16,
+    headerLines: [],
     lines: ["OUT1", "OUT2"],
     footerLines: ["FOOT"],
     workingLine: "WORK",
@@ -216,17 +254,19 @@ Deno.test("frameRows: a working line sits between output and footer", () => {
   })!;
   assertEquals(fr.rows.length, 10);
   const text = fr.rows.map((r) => plain(r));
-  // Order: output lines, working line, footer, then the bordered input box.
+  // Order: output lines, working line, bordered input box, footer.
   assertEquals(text.indexOf("OUT1") < text.indexOf("WORK"), true);
   assertEquals(text.indexOf("WORK") < text.indexOf("FOOT"), true);
   const borderIdx = text.findIndex((r) => r.includes("\u250C"));
-  assertEquals(text.indexOf("FOOT") < borderIdx, true); // footer above the box
+  assertEquals(text.indexOf("WORK") < borderIdx, true); // working above the box
+  assertEquals(borderIdx < text.indexOf("FOOT"), true); // box above the footer
 });
 
 Deno.test("frameRows: a working line takes a row from output, not the input box", () => {
   const base2 = (workingLine?: string) => ({
     rows: 12,
     cols: 20,
+    headerLines: [],
     lines: [],
     footerLines: [],
     inputRows: [""],
